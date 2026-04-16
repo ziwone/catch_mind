@@ -40,6 +40,9 @@ private:
     bool touchPressed = false;
     bool touchHasX = false;
     bool touchHasY = false;
+    bool strokeActive = false;
+    int strokeLastX = 0;
+    int strokeLastY = 0;
 
     // 게임 상태
     bool isDrawerRole = true;
@@ -52,6 +55,10 @@ private:
     std::vector<std::string> offeredWords;
     std::string player1LatestAnswer;
     std::string player2LatestAnswer;
+    std::string player1CurrentInput;
+    std::string player2CurrentInput;
+    bool player1Submitted = false;
+    bool player2Submitted = false;
 
     std::mt19937 rng;
     std::unordered_map<std::string, std::vector<std::string>> wordBank;
@@ -82,6 +89,9 @@ private:
     bool receiveControlMessage(std::string &kind, std::string &value, std::string &senderIp, std::string &senderNodeId);
     bool receiveDrawerSelected(std::string &senderIp);
     bool waitTouchReleasePoint(int &sx, int &sy, int timeoutMs);
+    void showTransitionScreen(const std::string &line1, const std::string &line2, int durationMs);
+    bool showConfirmDialog(const std::string &selectedText);
+    bool waitForGameReady(int timeoutMs);
     bool selectFromTouchMenu(const std::string &title,
                              const std::vector<std::string> &options,
                              int &selectedIndex,
