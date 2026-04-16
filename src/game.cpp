@@ -78,8 +78,8 @@ void CatchMindGame::drawGameLayout() {
 
 void CatchMindGame::drawStatus() {
     std::cout << "[round " << (round + 1) << "] "
-              << "category=" << currentCategory
-              << ", state=" << (isDrawing ? "drawing" : "idle") << std::endl;
+              << "카테고리=" << currentCategory
+              << ", 상태=" << (isDrawing ? "진행중" : "대기") << std::endl;
 }
 
 void CatchMindGame::start() {
@@ -179,10 +179,15 @@ bool CatchMindGame::roleSelection() {
         }
 
         if (roleSock >= 0 && FD_ISSET(roleSock, &readfds)) {
+            std::string kind;
+            std::string value;
             std::string senderIp;
-            if (receiveDrawerSelected(senderIp)) {
+            std::string senderNodeId;
+            if (receiveControlMessage(kind, value, senderIp, senderNodeId) && senderNodeId != nodeId && kind == "ROLE" &&
+                value == "DRAWER") {
                 isDrawerRole = false;
                 drawerIp = senderIp;
+                currentDrawerNodeId = senderNodeId;
                 std::cout << "[역할] " << drawerIp << " 보드가 출제자 선택 -> 자동 도전자 전환\n";
                 return true;
             }
@@ -345,6 +350,98 @@ void CatchMindGame::runChallengerStandby() {
     }
 }
 
+void CatchMindGame::runChallengerLiveRound() {
+    if (display == nullptr) {
+        return;
+    }
+
+    drawGameLayout();
+    resetCanvas();
+    paintAnswerPanel(1, 0x303030);
+    paintAnswerPanel(2, 0x303030);
+    display->drawText(28, 24, "CHALLENGER VIEW", Display::COLOR_WHITE, 2);
+
+    std::cout << "[도전자] 실시간 그림 수신 시작\n";
+
+    while (true) {
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(STDIN_FILENO, &readfds);
+        int maxfd = STDIN_FILENO;
+
+        if (roleSock >= 0) {
+            FD_SET(roleSock, &readfds);
+            if (roleSock > maxfd) {
+                maxfd = roleSock;
+            }
+        }
+
+        timeval tv{};
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000;
+
+        int ready = select(maxfd + 1, &readfds, nullptr, nullptr, &tv);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            std::perror("select(challenger-live)");
+            break;
+        }
+
+        if (roleSock >= 0 && FD_ISSET(roleSock, &readfds)) {
+            std::string kind;
+            std::string value;
+            std::string senderIp;
+            std::string senderNodeId;
+            if (receiveControlMessage(kind, value, senderIp, senderNodeId)) {
+                if (senderNodeId == nodeId) {
+                    continue;
+                }
+
+                if (!currentDrawerNodeId.empty() && senderNodeId != currentDrawerNodeId) {
+                    continue;
+                }
+
+                if (kind == "DRAW") {
+                    std::stringstream parse(value);
+                    std::string sxStr;
+                    std::string syStr;
+                    std::string colorStr;
+                    if (std::getline(parse, sxStr, ',') && std::getline(parse, syStr, ',') &&
+                        std::getline(parse, colorStr, ',')) {
+                        try {
+                            int sx = std::stoi(sxStr);
+                            int sy = std::stoi(syStr);
+                            unsigned int color = (unsigned int)std::stoul(colorStr, nullptr, 16);
+                            if (sx >= canvasX && sx < canvasX + canvasW && sy >= canvasY && sy < canvasY + canvasH) {
+                                display->drawRect(sx - 2, sy - 2, 5, 5, color);
+                            }
+                        } catch (...) {
+                        }
+                    }
+                } else if (kind == "CLEAR") {
+                    resetCanvas();
+                } else if (kind == "STATUS" && value == "ROUND_END") {
+                    std::cout << "[도전자] 라운드 종료\n";
+                    return;
+                }
+            }
+        }
+
+        if (FD_ISSET(STDIN_FILENO, &readfds)) {
+            std::string line;
+            if (!std::getline(std::cin, line)) {
+                break;
+            }
+            if (line == "q") {
+                std::cout << "[도전자] 강제 종료\n";
+                break;
+            }
+        }
+    }
+}
+
 std::vector<std::string> CatchMindGame::pickRandomWords(const std::vector<std::string> &pool, int count) {
     std::vector<std::string> words = pool;
     std::shuffle(words.begin(), words.end(), rng);
@@ -382,7 +479,7 @@ bool CatchMindGame::selectCategoryAndWord() {
 
     targetWord = offeredWords[(size_t)wordSelected];
     broadcastStatusMessage("DRAWING_START");
-    std::cout << "[drawer] selected word: " << targetWord << "\n";
+    std::cout << "[출제자] 선택한 주제어: " << targetWord << "\n";
     return true;
 }
 
@@ -905,7 +1002,7 @@ bool CatchMindGame::selectFromTouchMenu(const std::string &title,
         display->drawText(50, y + std::max(8, (itemH / 2) - 10), line, Display::COLOR_WHITE, 2);
     }
 
-    std::cout << "[touch] " << title << " 선택 대기 중...\n";
+    std::cout << "[터치] " << title << " 선택 대기 중...\n";
 
     while (true) {
         int sx = 0;
@@ -960,6 +1057,7 @@ bool CatchMindGame::selectFromTouchMenu(const std::string &title,
                     if (senderNodeId != nodeId && kind == "ROLE" && value == "DRAWER") {
                         isDrawerRole = false;
                         drawerIp = senderIp;
+                        currentDrawerNodeId = senderNodeId;
                         return false;
                     }
                 }
