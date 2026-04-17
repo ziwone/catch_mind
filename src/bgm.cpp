@@ -56,6 +56,25 @@ bool BgmPlayer::play(const std::string &path) {
     return true;
 }
 
+void BgmPlayer::playOnce(const std::string &path) {
+    int card = readAlsaCard();
+    std::string audioDev = "hw:" + std::to_string(card) + ",0";
+    const std::string cmd =
+        std::string(". ") + ALSA_SH +
+        " && " + APLAY_BIN +
+        " -D" + audioDev +
+        " " + path;
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl("/bin/sh", "sh", "-c", cmd.c_str(), nullptr);
+        _exit(1);
+    } else if (pid > 0) {
+        // 논블로킹: 재생이 끝날 때까지 기다리지 않음
+        waitpid(pid, nullptr, WNOHANG);
+    }
+}
+
 void BgmPlayer::stop() {
     running = false;
     pid_t pid = childPid.load();
