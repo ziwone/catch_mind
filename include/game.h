@@ -48,6 +48,7 @@ private:
     bool isDrawerRole = true;
     int roleSock = -1;
     std::string nodeId;
+    std::string myLocalIp;           // 자신의 로컬 IP
     std::string drawerIp;
     std::string currentCategory;
     std::string targetWord;
@@ -55,10 +56,18 @@ private:
     std::vector<std::string> offeredWords;
     std::string player1LatestAnswer;
     std::string player2LatestAnswer;
-    std::string player1CurrentInput;
-    std::string player2CurrentInput;
     bool player1Submitted = false;
     bool player2Submitted = false;
+
+    // 도전자 답 입력 (터치 키패드)
+    std::string myAnswerInput;
+    int myPlayerNumber = 0;   // 1 또는 2, 도전자 자신의 번호
+
+    // 출제자가 수신한 도전자 답
+    std::string receivedAnswer1;
+    std::string receivedAnswer2;
+    bool answerReceived1 = false;
+    bool answerReceived2 = false;
 
     std::mt19937 rng;
     std::unordered_map<std::string, std::vector<std::string>> wordBank;
@@ -69,6 +78,12 @@ private:
     void runSingleBoardRound();
     void runChallengerStandby();
     void runChallengerLiveRound();
+    void drawAnswerInputUI();
+    void drawChallengerKeypad(const std::string &currentInput);
+    bool handleKeypadTouch(int sx, int sy, std::string &input);
+    void drawChallengerAnswerScreen(int playerNum, const std::string &myInput, const std::string &answer1, const std::string &answer2);
+    void drawAnswerPanelOnly(int playerNum, const std::string &myInput, const std::string &answer1, const std::string &answer2);
+    void showDrawerJudgeScreen();
 
     // 화면
     void drawGameLayout();
@@ -78,7 +93,7 @@ private:
     void paintAnswerPanel(int playerIndex, unsigned int color);
     bool initTouchInput();
     void closeTouchInput();
-    void processTouchEvents();
+    void processTouchEvents(bool *released = nullptr, int *releaseX = nullptr, int *releaseY = nullptr);
     bool mapTouchToScreen(int rawX, int rawY, int &x, int &y) const;
     bool initRoleSocket();
     void closeRoleSocket();
@@ -86,6 +101,7 @@ private:
     void broadcastStatusMessage(const std::string &status);
     void broadcastDrawPoint(int x, int y, unsigned int color);
     void broadcastCanvasClear();
+    void broadcastAnswer(int playerNum, const std::string &answer);
     bool receiveControlMessage(std::string &kind, std::string &value, std::string &senderIp, std::string &senderNodeId);
     bool receiveDrawerSelected(std::string &senderIp);
     bool waitTouchReleasePoint(int &sx, int &sy, int timeoutMs);
@@ -104,6 +120,9 @@ private:
     bool handleGuess(int playerIndex, const std::string &answer);
     bool handleDrawCommand(const std::string &cmd);
     void printRoundGuide();
+    int getPlayerNumberFromIp(const std::string &ip);
+    int getChallengerSlotByDrawer(int myBoardNum, int drawerBoardNum);
+    std::string getLocalIpAddress();
 
 public:
     CatchMindGame();
