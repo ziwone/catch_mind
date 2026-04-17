@@ -10,6 +10,7 @@
 
 class CatchMindGame {
 private:
+    static constexpr int MAX_ROUNDS = 5;
     int round = 0;
     bool isDrawing = false;
     Display *display = nullptr;
@@ -72,6 +73,7 @@ private:
 
     std::mt19937 rng;
     std::unordered_map<std::string, std::vector<std::string>> wordBank;
+    std::unordered_map<std::string, int> gameScores;
     BgmPlayer bgm;
 
     // 흐름
@@ -126,6 +128,9 @@ private:
     int getPlayerNumberFromIp(const std::string &ip);
     int getChallengerSlotByDrawer(int myBoardNum, int drawerBoardNum);
     std::string getLocalIpAddress();
+    void broadcastScoreDelta(const std::string &targetNodeId, int delta);
+    void drawTimerGauge(int remainSec, int totalSec);
+    void showFinalScores();
 
 public:
     CatchMindGame();
