@@ -20,6 +20,58 @@
 
 namespace {
 
+namespace ui {
+constexpr unsigned int BG_DARK = 0x07060f;
+constexpr unsigned int BG_MID = 0x130a24;
+constexpr unsigned int CARD = 0x1a1133;
+constexpr unsigned int CARD_ALT = 0x261448;
+constexpr unsigned int STROKE = 0x4d2c80;
+constexpr unsigned int ACCENT = 0x00ffd5;
+constexpr unsigned int ACCENT_WARM = 0xffc83d;
+constexpr unsigned int TEXT_MAIN = 0xf4f6ff;
+constexpr unsigned int TEXT_DIM = 0xa996d0;
+constexpr unsigned int P1_ACCENT = 0x32c8ff;
+constexpr unsigned int P2_ACCENT = 0xff5ea8;
+constexpr unsigned int OK = 0x57ff9a;
+constexpr unsigned int NG = 0xff657a;
+}
+
+void drawPanelCard(Display *display,
+                   int x,
+                   int y,
+                   int w,
+                   int h,
+                   unsigned int border,
+                   unsigned int fillOuter,
+                   unsigned int fillInner) {
+    if (display == nullptr || w <= 0 || h <= 0) {
+        return;
+    }
+    display->drawRect(x, y, w, h, border);
+    if (w > 6 && h > 6) {
+        display->drawRect(x + 2, y + 2, w - 4, h - 4, border);
+    }
+    if (w > 2 && h > 2) {
+        display->drawRect(x + 1, y + 1, w - 2, h - 2, fillOuter);
+    }
+    if (w > 8 && h > 8) {
+        display->drawRect(x + 4, y + 4, w - 8, h - 8, fillInner);
+    }
+}
+
+void drawTextCentered(Display *display,
+                      int centerX,
+                      int y,
+                      const std::string &text,
+                      unsigned int color,
+                      int scale) {
+    if (display == nullptr) {
+        return;
+    }
+    int width = (int)text.size() * 6 * std::max(1, scale);
+    display->drawText(centerX - (width / 2), y, text, color, scale);
+}
+
 std::string toDisplayLabel(const std::string &text) {
     static const std::unordered_map<std::string, std::string> labels = {
         {"동물", "ANIMAL"},
@@ -96,38 +148,58 @@ bool CatchMindGame::initDisplay() {
 void CatchMindGame::drawGameLayout() {
     if (display == nullptr) return;
 
-    display->clearScreen(Display::COLOR_BLACK);
+    // 역할별 레이아웃 비율:
+    // 출제자  : 그리기 영역 확대 (상단 약 78%)
+    // 도전자  : 답안 영역 확대 (하단 약 44%)
+    int topRatioPct = isDrawerRole ? 78 : 56;
+    topH = (screenH * topRatioPct) / 100;
+    topH = std::max(140, std::min(screenH - 90, topH));
+    bottomY = topH;
+    panelH = screenH - topH;
 
-    // 상단 캔버스
-    // 출제자인 경우 금색(0xFFD700), 도전자인 경우 보라색(0x9932CC) 테두리
-    unsigned int canvasBorderColor = isDrawerRole ? 0xFFD700 : 0x9932CC;
-    display->drawRect(canvasX - 5, canvasY - 5, canvasW + 10, canvasH + 10, canvasBorderColor);
-    display->drawRect(canvasX - 3, canvasY - 3, canvasW + 6, canvasH + 6, 0x333333);
-    display->drawRect(canvasX, canvasY, canvasW, canvasH, Display::COLOR_BLACK);
-
-    // 상단: 역할 표시 (DRAWER)
-    if (isDrawerRole) {
-        display->drawText(canvasX + 5, canvasY + 5, "DRAWER", 0xFFD700, 2);
+    canvasW = std::max(100, screenW - 40);
+    canvasH = std::max(100, topH - 40);
+    if (cursorX < canvasX || cursorX >= canvasX + canvasW ||
+        cursorY < canvasY || cursorY >= canvasY + canvasH) {
+        cursorX = canvasX + (canvasW / 2);
+        cursorY = canvasY + (canvasH / 2);
     }
 
-    // 하단 정답 영역 2분할
+    display->clearScreen(ui::BG_DARK);
+    display->drawRect(0, 0, screenW, std::max(28, topH / 8), ui::BG_MID);
+
+    unsigned int canvasAccent = isDrawerRole ? ui::ACCENT_WARM : ui::ACCENT;
+    drawPanelCard(display,
+                  canvasX - 8,
+                  canvasY - 8,
+                  canvasW + 16,
+                  canvasH + 16,
+                  canvasAccent,
+                  ui::CARD,
+                  0x0b141c);
+    display->drawRect(canvasX, canvasY, canvasW, canvasH, Display::COLOR_BLACK);
+
+    if (isDrawerRole) {
+        display->drawRect(canvasX + 8, canvasY + 8, 96, 24, ui::ACCENT_WARM);
+        display->drawText(canvasX + 14, canvasY + 14, "DRAWER", 0x2a2110, 1);
+        display->drawText(canvasX + 120, canvasY + 14, "BIG DRAW AREA", ui::ACCENT_WARM, 1);
+    } else {
+        display->drawRect(canvasX + 8, canvasY + 8, 122, 24, ui::ACCENT);
+        display->drawText(canvasX + 14, canvasY + 14, "CHALLENGER", 0x102822, 1);
+        display->drawText(canvasX + 144, canvasY + 14, "BIG ANSWER AREA", ui::ACCENT, 1);
+    }
+
     int halfW = screenW / 2;
-    display->drawRect(0, bottomY, screenW, panelH, 0x1a1a1a);
+    display->drawRect(0, bottomY, screenW, panelH, ui::BG_MID);
 
-    // 도전자 구분 표시 및 색상 개선
-    // 왼쪽: 플레이어1 (도전자)
-    display->drawRect(1, bottomY + 1, halfW - 2, panelH - 2, 0x2a2a5a);
-    display->drawRect(0, bottomY, halfW, panelH, 0x555577);
-    display->drawText(5, bottomY + 5, "P1", Display::COLOR_WHITE, 2);
+    drawPanelCard(display, 0, bottomY, halfW, panelH, ui::P1_ACCENT, ui::CARD_ALT, 0x102336);
+    drawPanelCard(display, halfW, bottomY, screenW - halfW, panelH, ui::P2_ACCENT, ui::CARD_ALT, 0x2a1b21);
 
-    // 오른쪽: 플레이어2 (도전자)
-    display->drawRect(halfW + 1, bottomY + 1, halfW - 2, panelH - 2, 0x5a2a2a);
-    display->drawRect(halfW, bottomY, screenW - halfW, panelH, 0x775555);
-    display->drawText(screenW - halfW + 5, bottomY + 5, "P2", Display::COLOR_WHITE, 2);
+    display->drawRect(0, bottomY - 3, screenW, 3, ui::STROKE);
+    display->drawRect(halfW - 1, bottomY, 2, panelH, ui::STROKE);
 
-    // 경계선
-    display->drawRect(halfW - 2, bottomY, 4, panelH, 0x888888);
-    display->drawRect(0, bottomY - 2, screenW, 4, 0x888888);
+    display->drawText(10, bottomY + 8, "P1", ui::TEXT_MAIN, 2);
+    display->drawText(halfW + 10, bottomY + 8, "P2", ui::TEXT_MAIN, 2);
 
     drawStatus();
 }
@@ -193,7 +265,7 @@ bool CatchMindGame::roleSelection() {
         return false;
     }
 
-    display->clearScreen(Display::COLOR_BLACK);
+    display->clearScreen(ui::BG_DARK);
     int midX = screenW / 2;
     int boxY = screenH / 3;
     int boxW = screenW / 3;
@@ -202,14 +274,14 @@ bool CatchMindGame::roleSelection() {
     int drawerX = midX - boxW - gap;
     int challengerX = midX + gap;
 
-    // 역할 버튼(텍스트 렌더링은 없어서 색상 박스로 표현)
-    display->drawRect(drawerX - 4, boxY - 4, boxW + 8, boxH + 8, Display::COLOR_WHITE);
-    display->drawRect(challengerX - 4, boxY - 4, boxW + 8, boxH + 8, Display::COLOR_WHITE);
-    display->drawRect(drawerX, boxY, boxW, boxH, Display::COLOR_BLUE);      // left: drawer
-    display->drawRect(challengerX, boxY, boxW, boxH, 0x505050);              // right: challenger
-    display->drawText((screenW / 2) - 110, boxY - 60, "ROLE SELECT", Display::COLOR_WHITE, 3);
-    display->drawText(drawerX + 24, boxY + (boxH / 2) - 12, "DRAWER", Display::COLOR_WHITE, 3);
-    display->drawText(challengerX + 8, boxY + (boxH / 2) - 12, "CHALLENGER", Display::COLOR_WHITE, 2);
+    display->drawRect(0, 0, screenW, 58, ui::BG_MID);
+    drawTextCentered(display, screenW / 2, boxY - 60, "ROLE SELECT", ui::TEXT_MAIN, 3);
+    drawTextCentered(display, screenW / 2, boxY - 24, "LEFT DRAWER  |  RIGHT CHALLENGER", ui::TEXT_DIM, 1);
+
+    drawPanelCard(display, drawerX - 5, boxY - 5, boxW + 10, boxH + 10, ui::ACCENT_WARM, 0x3a2f1a, 0x2a2317);
+    drawPanelCard(display, challengerX - 5, boxY - 5, boxW + 10, boxH + 10, ui::ACCENT, 0x1a3a35, 0x15302c);
+    drawTextCentered(display, drawerX + (boxW / 2), boxY + (boxH / 2) - 14, "DRAWER", ui::TEXT_MAIN, 3);
+    drawTextCentered(display, challengerX + (boxW / 2), boxY + (boxH / 2) - 10, "CHALLENGER", ui::TEXT_MAIN, 2);
 
     std::cout << "[역할] 좌측 터치=출제자, 우측 터치=도전자\n";
     std::cout << "[역할] 키보드 보조입력: 1(출제자), 2(도전자), q(종료)\n";
@@ -432,9 +504,19 @@ bool CatchMindGame::roleSelection() {
 void CatchMindGame::runChallengerStandby() {
     isDrawing = false;
     if (display != nullptr) {
-        display->clearScreen(Display::COLOR_BLACK);
-        display->drawText((screenW / 2) - 150, (screenH / 2) - 30, "WORD SELECTING...", Display::COLOR_WHITE, 3);
-        display->drawText((screenW / 2) - 110, (screenH / 2) + 20, "PLEASE WAIT", 0xaaaaaa, 2);
+        display->clearScreen(ui::BG_DARK);
+        int cx = screenW / 2;
+        int cy = screenH / 2;
+        drawPanelCard(display,
+                      cx - (screenW * 3 / 10),
+                      cy - (screenH / 7),
+                      screenW * 3 / 5,
+                      screenH / 3,
+                      ui::ACCENT,
+                      ui::CARD,
+                      ui::BG_MID);
+        drawTextCentered(display, cx, cy - 26, "WORD SELECTING", ui::TEXT_MAIN, 3);
+        drawTextCentered(display, cx, cy + 20, "PLEASE WAIT", ui::TEXT_DIM, 2);
     }
 
     std::cout << "[도전자] 출제자=" << (drawerIp.empty() ? "알 수 없음" : drawerIp) << "\n";
@@ -477,13 +559,19 @@ void CatchMindGame::runChallengerStandby() {
                 }
                 if (kind == "STATUS") {
                     if (value == "WORD_SELECTING" && display != nullptr) {
-                        display->clearScreen(Display::COLOR_BLACK);
-                        display->drawText((screenW / 2) - 150,
-                                          (screenH / 2) - 30,
-                                          "WORD SELECTING...",
-                                          Display::COLOR_WHITE,
-                                          3);
-                        display->drawText((screenW / 2) - 110, (screenH / 2) + 20, "PLEASE WAIT", 0xaaaaaa, 2);
+                        display->clearScreen(ui::BG_DARK);
+                        int cx = screenW / 2;
+                        int cy = screenH / 2;
+                        drawPanelCard(display,
+                                      cx - (screenW * 3 / 10),
+                                      cy - (screenH / 7),
+                                      screenW * 3 / 5,
+                                      screenH / 3,
+                                      ui::ACCENT,
+                                      ui::CARD,
+                                      ui::BG_MID);
+                        drawTextCentered(display, cx, cy - 26, "WORD SELECTING", ui::TEXT_MAIN, 3);
+                        drawTextCentered(display, cx, cy + 20, "PLEASE WAIT", ui::TEXT_DIM, 2);
                     } else if (value == "DRAWING_START") {
                         std::cout << "[도전자] DRAWING_START 수신! 출제자=" << senderIp << "\n";
                         drawerIp = senderIp;
@@ -604,45 +692,47 @@ void CatchMindGame::runChallengerLiveRound() {
                 sendAnswerControl("A_POINT", std::to_string(myPlayerNumber) + "," + std::to_string(pt.first) + "," + std::to_string(pt.second));
             }
         }
+        queuedInkPoints.clear();
     };
 
     auto redrawPanels = [&]() {
-        paintAnswerPanel(1, 0x303030);
-        paintAnswerPanel(2, 0x303030);
+        paintAnswerPanel(1, 0x102336);
+        paintAnswerPanel(2, 0x2a1b21);
 
         if (myPlayerNumber == 1) {
-            display->drawRect(0, bottomY, halfW, panelH, 0xFFD700);
+            display->drawRect(0, bottomY, halfW, panelH, ui::ACCENT_WARM);
         } else {
-            display->drawRect(halfW, bottomY, screenW - halfW, panelH, 0xFFD700);
+            display->drawRect(halfW, bottomY, screenW - halfW, panelH, ui::ACCENT_WARM);
         }
 
         if (myPlayerNumber == 1) {
-            display->drawText(8, bottomY + 26, "ME:", Display::COLOR_WHITE, 1);
-            display->drawText(40, bottomY + 26, "WRITE HERE", Display::COLOR_YELLOW, 1);
+            display->drawText(8, bottomY + 26, "ME:", ui::TEXT_MAIN, 1);
+            display->drawText(40, bottomY + 26, "WRITE HERE", ui::ACCENT_WARM, 1);
             display->drawText(halfW + 8, bottomY + 26,
                               receivedAnswer2.empty() ? "P2: waiting..." : ("P2: " + receivedAnswer2).substr(0, 16),
-                              Display::COLOR_WHITE, 1);
+                              ui::TEXT_MAIN, 1);
         } else {
-            display->drawText(halfW + 8, bottomY + 26, "ME:", Display::COLOR_WHITE, 1);
-            display->drawText(halfW + 40, bottomY + 26, "WRITE HERE", Display::COLOR_YELLOW, 1);
+            display->drawText(halfW + 8, bottomY + 26, "ME:", ui::TEXT_MAIN, 1);
+            display->drawText(halfW + 40, bottomY + 26, "WRITE HERE", ui::ACCENT_WARM, 1);
             display->drawText(8, bottomY + 26,
                               receivedAnswer1.empty() ? "P1: waiting..." : ("P1: " + receivedAnswer1).substr(0, 16),
-                              Display::COLOR_WHITE, 1);
+                              ui::TEXT_MAIN, 1);
         }
 
-        display->drawRect(writeX, writeY, writeW, writeH, 0x1b1b1b);
-        display->drawRect(writeX, writeY, writeW, writeH, 0x555555);
-        display->drawText(writeX + 4, writeY + 4, "TOUCH WRITE", 0xaaaaaa, 1);
+        drawPanelCard(display, writeX, writeY, writeW, writeH, ui::STROKE, ui::CARD, 0x0b151f);
+        display->drawText(writeX + 6, writeY + 6, "TOUCH WRITE", ui::TEXT_DIM, 1);
 
-        unsigned int submitColor = submitLocked ? 0x333333 : (answerInkWritten ? 0x0a5a0a : 0x335533);
-        display->drawRect(btnX, btnY, btnW, btnH, submitColor);
-        display->drawText(btnX + 12, btnY + 10, "SUBMIT", Display::COLOR_GREEN, 1);
+        unsigned int submitColor = submitLocked ? 0x3a3f44 : (answerInkWritten ? 0x1f5c3b : 0x30483a);
+        unsigned int submitEdge = submitLocked ? ui::TEXT_DIM : ui::OK;
+        drawPanelCard(display, btnX, btnY, btnW, btnH, submitEdge, submitColor, submitColor);
+        display->drawText(btnX + 12, btnY + 10, "SUBMIT", submitEdge, 1);
     };
 
     auto redrawSubmitOnly = [&]() {
-        unsigned int submitColor = submitLocked ? 0x333333 : (answerInkWritten ? 0x0a5a0a : 0x335533);
-        display->drawRect(btnX, btnY, btnW, btnH, submitColor);
-        display->drawText(btnX + 12, btnY + 10, "SUBMIT", Display::COLOR_GREEN, 1);
+        unsigned int submitColor = submitLocked ? 0x3a3f44 : (answerInkWritten ? 0x1f5c3b : 0x30483a);
+        unsigned int submitEdge = submitLocked ? ui::TEXT_DIM : ui::OK;
+        drawPanelCard(display, btnX, btnY, btnW, btnH, submitEdge, submitColor, submitColor);
+        display->drawText(btnX + 12, btnY + 10, "SUBMIT", submitEdge, 1);
     };
 
     std::cout << "[도전자P" << myPlayerNumber << "] 그림 수신 시작\n";
@@ -669,7 +759,10 @@ input_phase:
             std::string kind, value, senderIp, senderNodeId;
             while (receiveControlMessage(kind, value, senderIp, senderNodeId)) {
                 if (senderNodeId == nodeId) continue;
-                if (!currentDrawerNodeId.empty() && senderNodeId != currentDrawerNodeId) continue;
+                bool fromDrawer = currentDrawerNodeId.empty() || senderNodeId == currentDrawerNodeId;
+                if ((kind == "DRAW" || kind == "CLEAR" || kind == "STATUS") && !fromDrawer) {
+                    continue;
+                }
 
                 if (kind == "DRAW") {
                     std::stringstream parse(value);
@@ -677,8 +770,12 @@ input_phase:
                     if (std::getline(parse, sxStr, ',') && std::getline(parse, syStr, ',') &&
                         std::getline(parse, colorStr, ',')) {
                         try {
-                            int sx = std::stoi(sxStr);
-                            int sy = std::stoi(syStr);
+                            int nx = std::stoi(sxStr);
+                            int ny = std::stoi(syStr);
+                            nx = std::max(0, std::min(999, nx));
+                            ny = std::max(0, std::min(999, ny));
+                            int sx = canvasX + (nx * std::max(1, canvasW - 1)) / 999;
+                            int sy = canvasY + (ny * std::max(1, canvasH - 1)) / 999;
                             unsigned int color = (unsigned int)std::stoul(colorStr, nullptr, 16);
                             if (sx >= canvasX && sx < canvasX + canvasW &&
                                 sy >= canvasY && sy < canvasY + canvasH) {
@@ -692,9 +789,17 @@ input_phase:
                     auto sep = value.find(':');
                     if (sep != std::string::npos) {
                         int pn = std::stoi(value.substr(0, sep));
+                        // 송신자의 보드 IP 기준으로 P1/P2를 재보정해 표시 불일치 방지
+                        int senderBoardNum = getPlayerNumberFromIp(senderIp);
+                        int drawerBoardNum = getPlayerNumberFromIp(drawerIp);
+                        int pnByIp = getChallengerSlotByDrawer(senderBoardNum, drawerBoardNum);
+                        if (pnByIp == 1 || pnByIp == 2) {
+                            pn = pnByIp;
+                        }
                         std::string ans = value.substr(sep + 1);
                         if (pn == 1) { receivedAnswer1 = ans; answerReceived1 = true; }
                         if (pn == 2) { receivedAnswer2 = ans; answerReceived2 = true; }
+                        redrawPanels();
                         std::cout << "[도전자P" << myPlayerNumber << "] P" << pn << " 답변 수신: " << ans << "\n";
                     }
                 } else if (kind == "STATUS" && value == "JUDGING_ACTIVE") {
@@ -722,6 +827,7 @@ input_phase:
                         touchHasY = true;
                     }
 
+                } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
                     if (touchPressed && touchHasX && touchHasY) {
                         int sx = 0, sy = 0;
                         if (!mapTouchToScreen(touchRawX, touchRawY, sx, sy)) continue;
@@ -763,7 +869,7 @@ input_phase:
                             int sx = 0, sy = 0;
                             if (mapTouchToScreen(touchRawX, touchRawY, sx, sy)) {
                                 if (sx >= btnX && sx < btnX + btnW && sy >= btnY && sy < btnY + btnH) {
-                                    if (!submitLocked && answerInkWritten) {
+                                    if (!submitted && !submitLocked && answerInkWritten) {
                                         flushQueuedInk();
                                         myAnswerInput = "DRAWN";
                                         broadcastAnswer(myPlayerNumber, myAnswerInput);
@@ -783,7 +889,7 @@ input_phase:
                         int sx = 0, sy = 0;
                         if (touchHasX && touchHasY && mapTouchToScreen(touchRawX, touchRawY, sx, sy)) {
                             if (sx >= btnX && sx < btnX + btnW && sy >= btnY && sy < btnY + btnH) {
-                                if (!submitLocked && answerInkWritten) {
+                                if (!submitted && !submitLocked && answerInkWritten) {
                                     flushQueuedInk();
                                     myAnswerInput = "DRAWN";
                                     broadcastAnswer(myPlayerNumber, myAnswerInput);
@@ -801,7 +907,7 @@ input_phase:
             std::string line;
             if (!std::getline(std::cin, line)) break;
             if (line == "q") break;
-            if (line == "submit" && !submitLocked && answerInkWritten) {
+            if (line == "submit" && !submitted && !submitLocked && answerInkWritten) {
                 flushQueuedInk();
                 myAnswerInput = "DRAWN";
                 broadcastAnswer(myPlayerNumber, myAnswerInput);
@@ -869,7 +975,12 @@ input_phase:
                     if (std::getline(parse, sxStr, ',') && std::getline(parse, syStr, ',') &&
                         std::getline(parse, colorStr, ',')) {
                         try {
-                            int sx = std::stoi(sxStr); int sy = std::stoi(syStr);
+                            int nx = std::stoi(sxStr);
+                            int ny = std::stoi(syStr);
+                            nx = std::max(0, std::min(999, nx));
+                            ny = std::max(0, std::min(999, ny));
+                            int sx = canvasX + (nx * std::max(1, canvasW - 1)) / 999;
+                            int sy = canvasY + (ny * std::max(1, canvasH - 1)) / 999;
                             unsigned int color = (unsigned int)std::stoul(colorStr, nullptr, 16);
                             if (sx >= canvasX && sx < canvasX + canvasW &&
                                 sy >= canvasY && sy < canvasY + canvasH)
@@ -880,9 +991,16 @@ input_phase:
                     auto sep = value.find(':');
                     if (sep != std::string::npos) {
                         int pn = std::stoi(value.substr(0, sep));
+                        int senderBoardNum = getPlayerNumberFromIp(senderIp);
+                        int drawerBoardNum = getPlayerNumberFromIp(drawerIp);
+                        int pnByIp = getChallengerSlotByDrawer(senderBoardNum, drawerBoardNum);
+                        if (pnByIp == 1 || pnByIp == 2) {
+                            pn = pnByIp;
+                        }
                         std::string ans = value.substr(sep + 1);
                         if (pn == 1) { receivedAnswer1 = ans; answerReceived1 = true; }
                         if (pn == 2) { receivedAnswer2 = ans; answerReceived2 = true; }
+                        redrawPanels();
                     }
                 }
             }
@@ -909,26 +1027,22 @@ bool CatchMindGame::showConfirmDialog(const std::string &selectedText) {
         return true;
     }
 
-    display->clearScreen(Display::COLOR_BLACK);
+    display->clearScreen(ui::BG_DARK);
 
     int cx = screenW / 2;
     int cy = screenH / 2;
 
-    // 중앙 박스
     int bw = screenW * 3 / 4;
     int bh = screenH / 3;
     int bx = cx - bw / 2;
     int by = cy - bh / 2;
-    display->drawRect(bx - 4, by - 4, bw + 8, bh + 8, Display::COLOR_YELLOW);
-    display->drawRect(bx, by, bw, bh, 0x1a1a1a);
+    drawPanelCard(display, bx - 4, by - 4, bw + 8, bh + 8, ui::ACCENT_WARM, ui::CARD, ui::BG_MID);
 
     // 선택된 텍스트 표시
     std::string label = toDisplayLabel(selectedText);
-    int textW = (int)label.size() * 6 * 3;
-    display->drawText(cx - textW / 2, by + 20, label, Display::COLOR_WHITE, 3);
+    drawTextCentered(display, cx, by + 24, label, ui::TEXT_MAIN, 3);
 
-    // "CONFIRM?" 텍스트
-    display->drawText(cx - 70, by + 70, "CONFIRM?", Display::COLOR_YELLOW, 2);
+    drawTextCentered(display, cx, by + 78, "CONFIRM SELECTION", ui::ACCENT_WARM, 2);
 
     // 좌측: YES 버튼 (좌클릭 또는 1)
     int btnW = (screenW - 40) / 2;
@@ -937,13 +1051,11 @@ bool CatchMindGame::showConfirmDialog(const std::string &selectedText) {
     int rightBtnX = 20 + btnW + 20;
     int btnY = screenH - 100;
 
-    display->drawRect(leftBtnX - 2, btnY - 2, btnW + 4, btnH + 4, Display::COLOR_GREEN);
-    display->drawRect(leftBtnX, btnY, btnW, btnH, 0x0a5a0a);
-    display->drawText(leftBtnX + 20, btnY + 15, "YES(1)", Display::COLOR_GREEN, 2);
+    drawPanelCard(display, leftBtnX - 2, btnY - 2, btnW + 4, btnH + 4, ui::OK, 0x1c492d, 0x1a3e29);
+    display->drawText(leftBtnX + 20, btnY + 15, "YES(1)", ui::OK, 2);
 
-    display->drawRect(rightBtnX - 2, btnY - 2, btnW + 4, btnH + 4, Display::COLOR_RED);
-    display->drawRect(rightBtnX, btnY, btnW, btnH, 0x5a0a0a);
-    display->drawText(rightBtnX + 15, btnY + 15, "NO(2)", Display::COLOR_RED, 2);
+    drawPanelCard(display, rightBtnX - 2, btnY - 2, btnW + 4, btnH + 4, ui::NG, 0x4f2222, 0x3f1e1e);
+    display->drawText(rightBtnX + 15, btnY + 15, "NO(2)", ui::NG, 2);
 
     std::cout << "[확인] " << selectedText << " 를 선택했습니다. (1=확인, 2=취소)\n";
 
@@ -1052,9 +1164,11 @@ bool CatchMindGame::selectCategoryAndWord() {
 void CatchMindGame::printRoundGuide() {
     std::cout << "\n[출제자 명령어]\n";
     std::cout << "  touch drag    : 그리기\n";
+    std::cout << "  top palette   : 색상 선택 / clear 버튼\n";
     std::cout << "  p             : 펜 on/off\n";
     std::cout << "  c             : 캔버스 초기화\n";
-    std::cout << "  1~5           : 색상 선택\n";
+    std::cout << "  1~7           : 빨주노초파남보\n";
+    std::cout << "  0             : 흰색\n";
     std::cout << "  ok1/ng1       : P1 정답/오답 판정\n";
     std::cout << "  ok2/ng2       : P2 정답/오답 판정\n";
     std::cout << "  q             : 라운드 종료\n\n";
@@ -1107,40 +1221,69 @@ void CatchMindGame::runSingleBoardRound() {
     player1LatestAnswer.clear();
     player2LatestAnswer.clear();
 
-    paintAnswerPanel(1, 0x303030);
-    paintAnswerPanel(2, 0x303030);
+    paintAnswerPanel(1, 0x102336);
+    paintAnswerPanel(2, 0x2a1b21);
+
+    const unsigned int rainbowColors[8] = {
+        Display::COLOR_WHITE, // white (default)
+        0xFF3030, // red
+        0xFF8C1A, // orange
+        0xFFD93D, // yellow
+        0x57FF7A, // green
+        0x3FA7FF, // blue
+        0x3A5CFF, // indigo
+        0xA24BFF  // violet
+    };
+    const int swatchSize = 26;
+    const int swatchGap = 8;
+    const int clearW = 86;
+    const int clearH = 32;
+    const int toolsY = 2;
+    const int paletteW = (8 * swatchSize) + (7 * swatchGap);
+    const int toolsX = std::max(8, screenW - paletteW - clearW - 24);
+    const int clearX = toolsX + paletteW + 8;
+
+    auto drawDrawerTools = [&]() {
+        display->drawRect(toolsX - 6, toolsY - 3, paletteW + clearW + 22, clearH + 7, ui::BG_MID);
+        for (int i = 0; i < 8; ++i) {
+            int x = toolsX + i * (swatchSize + swatchGap);
+            unsigned int edge = (brushColor == rainbowColors[i]) ? ui::ACCENT : ui::STROKE;
+            drawPanelCard(display, x, toolsY, swatchSize, swatchSize, edge, rainbowColors[i], rainbowColors[i]);
+        }
+        drawPanelCard(display, clearX, toolsY, clearW, clearH, ui::ACCENT_WARM, 0x533611, 0x3c280f);
+        display->drawText(clearX + 18, toolsY + 12, "CLEAR", ui::ACCENT_WARM, 1);
+    };
 
     auto drawJudgeButtonsFor = [&](int playerNum, bool visible) {
         int halfW = screenW / 2;
         int panelX = (playerNum == 1) ? 0 : halfW;
 
         // 참가자 패널 내부 상단에 소형 버튼 표시 (캔버스와 겹치지 않음)
-        int btnY = bottomY + 6;
-        int btnW = 56;
-        int btnH = 24;
+        int btnY = bottomY + 8;
+        int btnW = 78;
+        int btnH = 30;
         int okX = panelX + 10;
         int ngX = okX + btnW + 6;
 
         if (!visible) {
-            // 숨김 시 해당 영역을 배경색으로 덮기
-            display->drawRect(okX, btnY, btnW, btnH, Display::COLOR_BLACK);
-            display->drawRect(ngX, btnY, btnW, btnH, Display::COLOR_BLACK);
+            display->drawRect(okX, btnY, btnW, btnH, ui::CARD_ALT);
+            display->drawRect(ngX, btnY, btnW, btnH, ui::CARD_ALT);
             return;
         }
 
-        display->drawRect(okX, btnY, btnW, btnH, 0x0a5a0a);
-        display->drawText(okX + 12, btnY + 6, "OK", Display::COLOR_GREEN, 1);
+        drawPanelCard(display, okX, btnY, btnW, btnH, ui::OK, 0x1c492d, 0x1a3e29);
+        display->drawText(okX + 24, btnY + 9, "OK", ui::OK, 1);
 
-        display->drawRect(ngX, btnY, btnW, btnH, 0x5a0a0a);
-        display->drawText(ngX + 12, btnY + 6, "NG", Display::COLOR_RED, 1);
+        drawPanelCard(display, ngX, btnY, btnW, btnH, ui::NG, 0x4f2222, 0x3f1e1e);
+        display->drawText(ngX + 24, btnY + 9, "NG", ui::NG, 1);
     };
 
     auto getJudgeButtonRects = [&](int playerNum, int &okX, int &ngX, int &btnY, int &btnW, int &btnH) {
         int halfW = screenW / 2;
         int panelX = (playerNum == 1) ? 0 : halfW;
-        btnY = bottomY + 6;
-        btnW = 56;
-        btnH = 24;
+        btnY = bottomY + 8;
+        btnW = 78;
+        btnH = 30;
         okX = panelX + 10;
         ngX = okX + btnW + 6;
     };
@@ -1200,6 +1343,7 @@ void CatchMindGame::runSingleBoardRound() {
     printRoundGuide();
 
     drawBrushDot(cursorX, cursorY);
+    drawDrawerTools();
 
     std::string line;
     bool judgingActive = false;
@@ -1222,14 +1366,14 @@ void CatchMindGame::runSingleBoardRound() {
             receivedAnswer1.clear();
             answerReceived1 = false;
             answerStrokeActive1 = false;
-            paintAnswerPanel(1, 0x303030);
+            paintAnswerPanel(1, 0x102336);
             drawJudgeButtonsFor(1, false);
             broadcastStatusMessage("RETRY_P1");
         } else {
             receivedAnswer2.clear();
             answerReceived2 = false;
             answerStrokeActive2 = false;
-            paintAnswerPanel(2, 0x303030);
+            paintAnswerPanel(2, 0x2a1b21);
             drawJudgeButtonsFor(2, false);
             broadcastStatusMessage("RETRY_P2");
         }
@@ -1254,7 +1398,7 @@ void CatchMindGame::runSingleBoardRound() {
 
         timeval tv{};
         tv.tv_sec = 0;
-        tv.tv_usec = 10000;
+        tv.tv_usec = 5000;
 
         int ready = select(maxfd + 1, &readfds, nullptr, nullptr, &tv);
         if (ready < 0) { std::perror("select"); break; }
@@ -1266,6 +1410,30 @@ void CatchMindGame::runSingleBoardRound() {
 
             // 출제자 화면의 소형 OK/NG 버튼 터치 판정
             if (released) {
+                bool toolHandled = false;
+                for (int i = 0; i < 8; ++i) {
+                    int x = toolsX + i * (swatchSize + swatchGap);
+                    if (rsx >= x && rsx < x + swatchSize && rsy >= toolsY && rsy < toolsY + swatchSize) {
+                        brushColor = rainbowColors[i];
+                        drawDrawerTools();
+                        drawBrushDot(cursorX, cursorY);
+                        std::cout << "[그리기] 팔레트 색상 선택 index=" << (i + 1) << "\n";
+                        toolHandled = true;
+                        break;
+                    }
+                }
+                if (toolHandled) {
+                    continue;
+                }
+                if (rsx >= clearX && rsx < clearX + clearW && rsy >= toolsY && rsy < toolsY + clearH) {
+                    resetCanvas();
+                    drawBrushDot(cursorX, cursorY);
+                    drawDrawerTools();
+                    broadcastCanvasClear();
+                    std::cout << "[그리기] 캔버스 초기화(터치 버튼)\n";
+                    continue;
+                }
+
                 int okX = 0, ngX = 0, btnY = 0, btnW = 0, btnH = 0;
 
                 getJudgeButtonRects(1, okX, ngX, btnY, btnW, btnH);
@@ -1423,23 +1591,35 @@ bool CatchMindGame::handleDrawCommand(const std::string &cmd) {
         return true;
     }
     if (cmd == "1") {
-        brushColor = Display::COLOR_WHITE;
+        brushColor = 0xFF3030;
         return true;
     }
     if (cmd == "2") {
-        brushColor = Display::COLOR_RED;
+        brushColor = 0xFF8C1A;
         return true;
     }
     if (cmd == "3") {
-        brushColor = Display::COLOR_GREEN;
+        brushColor = 0xFFD93D;
         return true;
     }
     if (cmd == "4") {
-        brushColor = Display::COLOR_BLUE;
+        brushColor = 0x57FF7A;
         return true;
     }
     if (cmd == "5") {
-        brushColor = Display::COLOR_YELLOW;
+        brushColor = 0x3FA7FF;
+        return true;
+    }
+    if (cmd == "6") {
+        brushColor = 0x3A5CFF;
+        return true;
+    }
+    if (cmd == "7") {
+        brushColor = 0xA24BFF;
+        return true;
+    }
+    if (cmd == "0") {
+        brushColor = Display::COLOR_WHITE;
         return true;
     }
 
@@ -1470,7 +1650,8 @@ void CatchMindGame::paintAnswerPanel(int playerIndex, unsigned int color) {
     int x = (playerIndex == 1) ? 0 : halfW;
     int w = (playerIndex == 1) ? halfW : (screenW - halfW);
 
-    display->drawRect(x + 4, bottomY + 4, w - 8, panelH - 8, color);
+    unsigned int edge = (playerIndex == 1) ? ui::P1_ACCENT : ui::P2_ACCENT;
+    drawPanelCard(display, x + 3, bottomY + 3, w - 6, panelH - 6, edge, ui::CARD_ALT, color);
 }
 
 std::string CatchMindGame::normalizeText(const std::string &text) {
@@ -1604,7 +1785,7 @@ void CatchMindGame::processTouchEvents(bool *released, int *releaseX, int *relea
             } else {
                 int dx = sx - strokeLastX;
                 int dy = sy - strokeLastY;
-                int steps = std::max(std::abs(dx), std::abs(dy)) / 2;
+                int steps = std::max(std::abs(dx), std::abs(dy));
                 steps = std::max(1, steps);
 
                 for (int i = 1; i <= steps; ++i) {
@@ -1708,26 +1889,20 @@ void CatchMindGame::showTransitionScreen(const std::string &line1, const std::st
         return;
     }
 
-    display->clearScreen(Display::COLOR_BLACK);
+    display->clearScreen(ui::BG_DARK);
 
     int cx = screenW / 2;
     int cy = screenH / 2;
 
-    // 중앙 테두리 박스
     int bw = screenW * 2 / 3;
     int bh = screenH / 4;
     int bx = cx - bw / 2;
     int by = cy - bh / 2;
-    display->drawRect(bx - 4, by - 4, bw + 8, bh + 8, Display::COLOR_WHITE);
-    display->drawRect(bx, by, bw, bh, 0x1a1a2e);
+    unsigned int edge = (line1.find("CORRECT") != std::string::npos) ? ui::OK : ui::ACCENT;
+    drawPanelCard(display, bx - 6, by - 6, bw + 12, bh + 12, edge, ui::CARD, ui::BG_MID);
 
-    // 첫 번째 줄 (큰 글씨)
-    int textW1 = (int)line1.size() * 6 * 3;
-    display->drawText(cx - textW1 / 2, by + bh / 4 - 10, line1, Display::COLOR_WHITE, 3);
-
-    // 두 번째 줄 (작은 글씨)
-    int textW2 = (int)line2.size() * 6 * 2;
-    display->drawText(cx - textW2 / 2, by + bh * 3 / 4 - 7, line2, 0xaaaaaa, 2);
+    drawTextCentered(display, cx, by + bh / 4 - 10, line1, ui::TEXT_MAIN, 3);
+    drawTextCentered(display, cx, by + bh * 3 / 4 - 7, line2, ui::TEXT_DIM, 2);
 
     usleep(durationMs * 1000);
 }
@@ -1819,8 +1994,13 @@ void CatchMindGame::broadcastDrawPoint(int x, int y, unsigned int color) {
         return;
     }
 
+    int nx = ((x - canvasX) * 999) / std::max(1, canvasW - 1);
+    int ny = ((y - canvasY) * 999) / std::max(1, canvasH - 1);
+    nx = std::max(0, std::min(999, nx));
+    ny = std::max(0, std::min(999, ny));
+
     std::stringstream ss;
-    ss << x << "," << y << "," << std::hex << color;
+    ss << nx << "," << ny << "," << std::hex << color;
     std::string payload = "CM|" + nodeId + "|DRAW|" + ss.str();
 
     sockaddr_in to{};
@@ -1990,8 +2170,10 @@ bool CatchMindGame::selectFromTouchMenu(const std::string &title,
         broadcastStatusMessage(statusForOthers);
     }
 
-    display->clearScreen(Display::COLOR_BLACK);
-    display->drawText(30, 24, title + " SELECT", Display::COLOR_WHITE, 3);
+    display->clearScreen(ui::BG_DARK);
+    display->drawRect(0, 0, screenW, 56, ui::BG_MID);
+    display->drawText(24, 18, title + " SELECT", ui::TEXT_MAIN, 3);
+    display->drawText(screenW - 180, 24, "TOUCH TO CHOOSE", ui::TEXT_DIM, 1);
 
     const int menuTop = 90;
     const int menuBottom = screenH - 30;
@@ -2001,11 +2183,17 @@ bool CatchMindGame::selectFromTouchMenu(const std::string &title,
 
     for (size_t i = 0; i < options.size(); ++i) {
         int y = menuTop + (int)i * (itemH + itemGap);
-        display->drawRect(30, y, screenW - 60, itemH, 0x202020);
-        display->drawRect(34, y + 4, screenW - 68, itemH - 8, highlightColor);
+        drawPanelCard(display,
+                      28,
+                      y,
+                      screenW - 56,
+                      itemH,
+                      ui::STROKE,
+                      ui::CARD,
+                      highlightColor);
 
         std::string line = std::to_string((int)i + 1) + ". " + toDisplayLabel(options[i]);
-        display->drawText(50, y + std::max(8, (itemH / 2) - 10), line, Display::COLOR_WHITE, 2);
+        display->drawText(48, y + std::max(8, (itemH / 2) - 10), line, ui::TEXT_MAIN, 2);
 
         std::cout << "  " << (i + 1) << ") " << options[i] << " [" << toDisplayLabel(options[i]) << "]\n";
     }
@@ -2086,27 +2274,32 @@ void CatchMindGame::drawChallengerKeypad(const std::string &currentInput) {
     int inputAreaH = screenH - drawAreaH;
 
     // 배경 다시 그려서 이전 내용 지우기
-    display->drawRect(0, inputAreaY, screenW, inputAreaH, 0x111122);
-    display->drawRect(0, inputAreaY, screenW, 2, 0x9932CC);
+    display->drawRect(0, inputAreaY, screenW, inputAreaH, ui::BG_MID);
+    display->drawRect(0, inputAreaY, screenW, 2, ui::ACCENT);
 
     // 현재 입력값 표시 박스
     int dispH = 32;
     int dispY = inputAreaY + 4;
-    display->drawRect(4, dispY, screenW - 130, dispH, 0x223355);
-    display->drawRect(4, dispY, screenW - 130, dispH, 0x334466);
+    drawPanelCard(display, 4, dispY, screenW - 130, dispH, ui::STROKE, ui::CARD, ui::CARD_ALT);
     if (!currentInput.empty()) {
-        display->drawText(10, dispY + 8, currentInput, Display::COLOR_WHITE, 2);
+        display->drawText(10, dispY + 8, currentInput, ui::TEXT_MAIN, 2);
     } else {
-        display->drawText(10, dispY + 8, "...", 0x666666, 2);
+        display->drawText(10, dispY + 8, "...", ui::TEXT_DIM, 2);
     }
 
     // SUBMIT 버튼
     int subBtnW = 120, subBtnH = 36;
     int subBtnX = screenW - subBtnW - 8;
     int subBtnY = inputAreaY + inputAreaH - subBtnH - 8;
-    unsigned int subColor = currentInput.empty() ? 0x335533 : Display::COLOR_GREEN;
-    display->drawRect(subBtnX - 2, subBtnY - 2, subBtnW + 4, subBtnH + 4, subColor);
-    display->drawRect(subBtnX, subBtnY, subBtnW, subBtnH, currentInput.empty() ? 0x1a2a1a : 0x0a5a0a);
+    unsigned int subColor = currentInput.empty() ? 0x6f8f7c : ui::OK;
+    drawPanelCard(display,
+                  subBtnX - 2,
+                  subBtnY - 2,
+                  subBtnW + 4,
+                  subBtnH + 4,
+                  subColor,
+                  currentInput.empty() ? 0x274132 : 0x1c492d,
+                  currentInput.empty() ? 0x223a2c : 0x1a3e29);
     display->drawText(subBtnX + 15, subBtnY + 10, "SUBMIT", subColor, 2);
 
     // 키패드 그리기
@@ -2126,10 +2319,9 @@ void CatchMindGame::drawChallengerKeypad(const std::string &currentInput) {
 
         for (int col = 0; col < n; ++col) {
             int x = startX + col * keyW;
-            display->drawRect(x + 1, y + 1, keyW - 2, keyH - 2, 0x2a2a4a);
-            display->drawRect(x + 2, y + 2, keyW - 4, keyH - 4, 0x3a3a6a);
+            drawPanelCard(display, x + 1, y + 1, keyW - 2, keyH - 2, ui::STROKE, ui::CARD, ui::CARD_ALT);
             char ch[2] = {keys[col], 0};
-            display->drawText(x + keyW / 2 - 4, y + keyH / 2 - 7, ch, Display::COLOR_WHITE, 1);
+            display->drawText(x + keyW / 2 - 4, y + keyH / 2 - 7, ch, ui::TEXT_MAIN, 1);
         }
     }
 
@@ -2140,10 +2332,10 @@ void CatchMindGame::drawChallengerKeypad(const std::string &currentInput) {
     int clrX = screenW - 74;
     int utilBtnW = 68;
 
-    display->drawRect(delX + 1, utilY + 1, utilBtnW - 2, utilBtnH - 2, 0x4a2a2a);
-    display->drawText(delX + 8, utilY + 4, "DEL", Display::COLOR_RED, 1);
-    display->drawRect(clrX + 1, utilY + 1, utilBtnW - 2, utilBtnH - 2, 0x4a3a1a);
-    display->drawText(clrX + 8, utilY + 4, "CLR", 0xFFAA00, 1);
+    drawPanelCard(display, delX + 1, utilY + 1, utilBtnW - 2, utilBtnH - 2, ui::NG, 0x4f2222, 0x3f1e1e);
+    display->drawText(delX + 8, utilY + 4, "DEL", ui::NG, 1);
+    drawPanelCard(display, clrX + 1, utilY + 1, utilBtnW - 2, utilBtnH - 2, ui::ACCENT_WARM, 0x4f3a20, 0x3f311d);
+    display->drawText(clrX + 8, utilY + 4, "CLR", ui::ACCENT_WARM, 1);
 }
 
 bool CatchMindGame::handleKeypadTouch(int sx, int sy, std::string &input) {
@@ -2234,53 +2426,50 @@ void CatchMindGame::drawChallengerAnswerScreen(int playerNum, const std::string 
     int halfW = screenW / 2;
 
     // 상단 70%: 그림 영역 (캔버스는 이미 그려져 있으므로 경계선만)
-    display->drawRect(canvasX - 5, canvasY - 5, canvasW + 10, canvasH + 10, 0x9932CC);
-    display->drawRect(canvasX - 3, canvasY - 3, canvasW + 6, canvasH + 6, 0x333333);
+    drawPanelCard(display, canvasX - 5, canvasY - 5, canvasW + 10, canvasH + 10, ui::ACCENT, ui::CARD, 0x0b141c);
 
     // 하단 30%: P1/P2 입력 영역
     // P1 (왼쪽)
-    display->drawRect(0, inputAreaY, halfW, inputAreaH, 0x0a0a0f);
-    display->drawRect(0, inputAreaY, halfW - 1, inputAreaH, 0xFFD700); // 노란 테두리
-    display->drawText(5, inputAreaY + 5, "P1", 0xFFD700, 2);
+    drawPanelCard(display, 0, inputAreaY, halfW, inputAreaH, ui::P1_ACCENT, ui::CARD, 0x102336);
+    display->drawText(5, inputAreaY + 5, "P1", ui::P1_ACCENT, 2);
     if (playerNum == 1) {
         display->drawText(5, inputAreaY + 35, "Your Answer:", Display::COLOR_WHITE, 1);
         if (myInput.length() > 0)
-            display->drawText(5, inputAreaY + 55, myInput.substr(0, 14), Display::COLOR_YELLOW, 1);
+            display->drawText(5, inputAreaY + 55, myInput.substr(0, 14), ui::ACCENT_WARM, 1);
         else
-            display->drawText(5, inputAreaY + 55, "_____", 0x666666, 1);
+            display->drawText(5, inputAreaY + 55, "_____", ui::TEXT_DIM, 1);
     } else {
         if (!answer1.empty())
-            display->drawText(5, inputAreaY + 35, answer1.substr(0, 16), Display::COLOR_YELLOW, 2);
+            display->drawText(5, inputAreaY + 35, answer1.substr(0, 16), ui::ACCENT_WARM, 2);
         else
-            display->drawText(5, inputAreaY + 35, "waiting...", 0x666666, 2);
+            display->drawText(5, inputAreaY + 35, "waiting...", ui::TEXT_DIM, 2);
     }
 
     // P2 (오른쪽)
-    display->drawRect(halfW, inputAreaY, halfW, inputAreaH, 0x0a0a0f);
-    display->drawRect(halfW, inputAreaY, halfW - 1, inputAreaH, 0xFFD700); // 노란 테두리
-    display->drawText(halfW + 5, inputAreaY + 5, "P2", 0xFFD700, 2);
+    drawPanelCard(display, halfW, inputAreaY, halfW, inputAreaH, ui::P2_ACCENT, ui::CARD, 0x2a1b21);
+    display->drawText(halfW + 5, inputAreaY + 5, "P2", ui::P2_ACCENT, 2);
     if (playerNum == 2) {
         display->drawText(halfW + 5, inputAreaY + 35, "Your Answer:", Display::COLOR_WHITE, 1);
         if (myInput.length() > 0)
-            display->drawText(halfW + 5, inputAreaY + 55, myInput.substr(0, 14), Display::COLOR_YELLOW, 1);
+            display->drawText(halfW + 5, inputAreaY + 55, myInput.substr(0, 14), ui::ACCENT_WARM, 1);
         else
-            display->drawText(halfW + 5, inputAreaY + 55, "_____", 0x666666, 1);
+            display->drawText(halfW + 5, inputAreaY + 55, "_____", ui::TEXT_DIM, 1);
     } else {
         if (!answer2.empty())
-            display->drawText(halfW + 5, inputAreaY + 35, answer2.substr(0, 16), Display::COLOR_YELLOW, 2);
+            display->drawText(halfW + 5, inputAreaY + 35, answer2.substr(0, 16), ui::ACCENT_WARM, 2);
         else
-            display->drawText(halfW + 5, inputAreaY + 35, "waiting...", 0x666666, 2);
+            display->drawText(halfW + 5, inputAreaY + 35, "waiting...", ui::TEXT_DIM, 2);
     }
 
     // SUBMIT 버튼 (자신의 영역에만)
     int btnW = 80, btnH = 30;
     int btnY = inputAreaY + inputAreaH - btnH - 5;
     if (playerNum == 1) {
-        display->drawRect(5, btnY, btnW, btnH, 0x004400);
-        display->drawText(10, btnY + 8, "SUBMIT", Display::COLOR_GREEN, 1);
+        drawPanelCard(display, 5, btnY, btnW, btnH, ui::OK, 0x1c492d, 0x1a3e29);
+        display->drawText(10, btnY + 8, "SUBMIT", ui::OK, 1);
     } else {
-        display->drawRect(halfW + halfW/2 - btnW/2, btnY, btnW, btnH, 0x004400);
-        display->drawText(halfW + halfW/2 - btnW/2 + 10, btnY + 8, "SUBMIT", Display::COLOR_GREEN, 1);
+        drawPanelCard(display, halfW + halfW/2 - btnW/2, btnY, btnW, btnH, ui::OK, 0x1c492d, 0x1a3e29);
+        display->drawText(halfW + halfW/2 - btnW/2 + 10, btnY + 8, "SUBMIT", ui::OK, 1);
     }
 }
 
@@ -2294,50 +2483,45 @@ void CatchMindGame::drawAnswerPanelOnly(int playerNum, const std::string &myInpu
     int inputAreaH = screenH - drawAreaH;
     int halfW = screenW / 2;
 
-    // 하단 30%: P1/P2 입력 영역 (기존 내용 제거하고 새로 그리기)
-    // P1 (왼쪽)
-    display->drawRect(0, inputAreaY, halfW, inputAreaH, 0x0a0a0f);
-    display->drawRect(0, inputAreaY, halfW - 1, inputAreaH, 0xFFD700); // 노란 테두리
-    display->drawText(5, inputAreaY + 5, "P1", 0xFFD700, 2);
+    drawPanelCard(display, 0, inputAreaY, halfW, inputAreaH, ui::P1_ACCENT, ui::CARD, 0x102336);
+    display->drawText(5, inputAreaY + 5, "P1", ui::P1_ACCENT, 2);
     if (playerNum == 1) {
         display->drawText(5, inputAreaY + 35, "Your Answer:", Display::COLOR_WHITE, 1);
         if (myInput.length() > 0)
-            display->drawText(5, inputAreaY + 55, myInput.substr(0, 14), Display::COLOR_YELLOW, 1);
+            display->drawText(5, inputAreaY + 55, myInput.substr(0, 14), ui::ACCENT_WARM, 1);
         else
-            display->drawText(5, inputAreaY + 55, "_____", 0x666666, 1);
+            display->drawText(5, inputAreaY + 55, "_____", ui::TEXT_DIM, 1);
     } else {
         if (!answer1.empty())
-            display->drawText(5, inputAreaY + 35, answer1.substr(0, 16), Display::COLOR_YELLOW, 2);
+            display->drawText(5, inputAreaY + 35, answer1.substr(0, 16), ui::ACCENT_WARM, 2);
         else
-            display->drawText(5, inputAreaY + 35, "waiting...", 0x666666, 2);
+            display->drawText(5, inputAreaY + 35, "waiting...", ui::TEXT_DIM, 2);
     }
 
-    // P2 (오른쪽)
-    display->drawRect(halfW, inputAreaY, halfW, inputAreaH, 0x0a0a0f);
-    display->drawRect(halfW, inputAreaY, halfW - 1, inputAreaH, 0xFFD700); // 노란 테두리
-    display->drawText(halfW + 5, inputAreaY + 5, "P2", 0xFFD700, 2);
+    drawPanelCard(display, halfW, inputAreaY, halfW, inputAreaH, ui::P2_ACCENT, ui::CARD, 0x2a1b21);
+    display->drawText(halfW + 5, inputAreaY + 5, "P2", ui::P2_ACCENT, 2);
     if (playerNum == 2) {
         display->drawText(halfW + 5, inputAreaY + 35, "Your Answer:", Display::COLOR_WHITE, 1);
         if (myInput.length() > 0)
-            display->drawText(halfW + 5, inputAreaY + 55, myInput.substr(0, 14), Display::COLOR_YELLOW, 1);
+            display->drawText(halfW + 5, inputAreaY + 55, myInput.substr(0, 14), ui::ACCENT_WARM, 1);
         else
-            display->drawText(halfW + 5, inputAreaY + 55, "_____", 0x666666, 1);
+            display->drawText(halfW + 5, inputAreaY + 55, "_____", ui::TEXT_DIM, 1);
     } else {
         if (!answer2.empty())
-            display->drawText(halfW + 5, inputAreaY + 35, answer2.substr(0, 16), Display::COLOR_YELLOW, 2);
+            display->drawText(halfW + 5, inputAreaY + 35, answer2.substr(0, 16), ui::ACCENT_WARM, 2);
         else
-            display->drawText(halfW + 5, inputAreaY + 35, "waiting...", 0x666666, 2);
+            display->drawText(halfW + 5, inputAreaY + 35, "waiting...", ui::TEXT_DIM, 2);
     }
 
     // SUBMIT 버튼 (자신의 영역에만)
     int btnW = 80, btnH = 30;
     int btnY = inputAreaY + inputAreaH - btnH - 5;
     if (playerNum == 1) {
-        display->drawRect(5, btnY, btnW, btnH, 0x004400);
-        display->drawText(10, btnY + 8, "SUBMIT", Display::COLOR_GREEN, 1);
+        drawPanelCard(display, 5, btnY, btnW, btnH, ui::OK, 0x1c492d, 0x1a3e29);
+        display->drawText(10, btnY + 8, "SUBMIT", ui::OK, 1);
     } else {
-        display->drawRect(halfW + halfW/2 - btnW/2, btnY, btnW, btnH, 0x004400);
-        display->drawText(halfW + halfW/2 - btnW/2 + 10, btnY + 8, "SUBMIT", Display::COLOR_GREEN, 1);
+        drawPanelCard(display, halfW + halfW/2 - btnW/2, btnY, btnW, btnH, ui::OK, 0x1c492d, 0x1a3e29);
+        display->drawText(halfW + halfW/2 - btnW/2 + 10, btnY + 8, "SUBMIT", ui::OK, 1);
     }
 }
 
@@ -2346,46 +2530,47 @@ void CatchMindGame::showDrawerJudgeScreen() {
     if (display == nullptr) return;
 
     auto drawJudge = [&]() {
-        display->clearScreen(Display::COLOR_BLACK);
-        display->drawText(20, 10, "JUDGE ANSWERS", 0xFFD700, 3);
+        display->clearScreen(ui::BG_DARK);
+        display->drawRect(0, 0, screenW, 52, ui::BG_MID);
+        display->drawText(20, 10, "JUDGE ANSWERS", ui::ACCENT_WARM, 3);
 
         int halfW = screenW / 2;
         int panelTop = 60;
         int panelH2 = (screenH - panelTop - 80) / 2;
 
         // P1 패널
-        display->drawRect(4, panelTop, halfW - 8, panelH2, 0x1a1a3a);
-        display->drawText(10, panelTop + 6, "P1:", Display::COLOR_WHITE, 2);
+        drawPanelCard(display, 4, panelTop, halfW - 8, panelH2, ui::P1_ACCENT, ui::CARD, 0x102336);
+        display->drawText(10, panelTop + 6, "P1:", ui::TEXT_MAIN, 2);
         if (!receivedAnswer1.empty())
-            display->drawText(10, panelTop + 30, receivedAnswer1.substr(0, 18), Display::COLOR_YELLOW, 2);
+            display->drawText(10, panelTop + 30, receivedAnswer1.substr(0, 18), ui::ACCENT_WARM, 2);
         else
-            display->drawText(10, panelTop + 30, "waiting...", 0x666666, 2);
+            display->drawText(10, panelTop + 30, "waiting...", ui::TEXT_DIM, 2);
 
         // P2 패널
-        display->drawRect(halfW + 4, panelTop, halfW - 8, panelH2, 0x1a1a3a);
-        display->drawText(halfW + 10, panelTop + 6, "P2:", Display::COLOR_WHITE, 2);
+        drawPanelCard(display, halfW + 4, panelTop, halfW - 8, panelH2, ui::P2_ACCENT, ui::CARD, 0x2a1b21);
+        display->drawText(halfW + 10, panelTop + 6, "P2:", ui::TEXT_MAIN, 2);
         if (!receivedAnswer2.empty())
-            display->drawText(halfW + 10, panelTop + 30, receivedAnswer2.substr(0, 18), Display::COLOR_YELLOW, 2);
+            display->drawText(halfW + 10, panelTop + 30, receivedAnswer2.substr(0, 18), ui::ACCENT_WARM, 2);
         else
-            display->drawText(halfW + 10, panelTop + 30, "waiting...", 0x666666, 2);
+            display->drawText(halfW + 10, panelTop + 30, "waiting...", ui::TEXT_DIM, 2);
 
         int btnY = screenH - 70;
         int btnW = (halfW - 16) / 2;
 
         // P1 OK/NG
         if (!receivedAnswer1.empty()) {
-            display->drawRect(4,          btnY, btnW, 50, 0x0a5a0a);
-            display->drawText(4 + 8,      btnY + 14, "P1 OK", Display::COLOR_GREEN, 2);
-            display->drawRect(4 + btnW + 4, btnY, btnW, 50, 0x5a0a0a);
-            display->drawText(4 + btnW + 12, btnY + 14, "P1 NG", Display::COLOR_RED, 2);
+            drawPanelCard(display, 4, btnY, btnW, 50, ui::OK, 0x1c492d, 0x1a3e29);
+            display->drawText(4 + 8, btnY + 14, "P1 OK", ui::OK, 2);
+            drawPanelCard(display, 4 + btnW + 4, btnY, btnW, 50, ui::NG, 0x4f2222, 0x3f1e1e);
+            display->drawText(4 + btnW + 12, btnY + 14, "P1 NG", ui::NG, 2);
         }
         // P2 OK/NG
         if (!receivedAnswer2.empty()) {
             int p2Base = halfW + 4;
-            display->drawRect(p2Base,              btnY, btnW, 50, 0x0a5a0a);
-            display->drawText(p2Base + 8,          btnY + 14, "P2 OK", Display::COLOR_GREEN, 2);
-            display->drawRect(p2Base + btnW + 4,   btnY, btnW, 50, 0x5a0a0a);
-            display->drawText(p2Base + btnW + 12,  btnY + 14, "P2 NG", Display::COLOR_RED, 2);
+            drawPanelCard(display, p2Base, btnY, btnW, 50, ui::OK, 0x1c492d, 0x1a3e29);
+            display->drawText(p2Base + 8, btnY + 14, "P2 OK", ui::OK, 2);
+            drawPanelCard(display, p2Base + btnW + 4, btnY, btnW, 50, ui::NG, 0x4f2222, 0x3f1e1e);
+            display->drawText(p2Base + btnW + 12, btnY + 14, "P2 NG", ui::NG, 2);
         }
     };
 
