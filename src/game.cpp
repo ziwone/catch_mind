@@ -136,6 +136,9 @@ void CatchMindGame::drawStatus() {
 }
 
 void CatchMindGame::start() {
+    bgm.setVolume(50);
+    bgm.play("/mnt/nfs/bgm/maple1.wav");
+
     std::cout << "=====================================\n";
     std::cout << "캐치마인드 멀티보드 프로토타입\n";
     std::cout << "- 같은 허브의 보드들이 역할을 자동 연동\n";

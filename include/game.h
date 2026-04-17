@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "bgm.h"
 #include "display.h"
 
 class CatchMindGame {
@@ -62,6 +63,7 @@ private:
 
     std::mt19937 rng;
     std::unordered_map<std::string, std::vector<std::string>> wordBank;
+    BgmPlayer bgm;
 
     // 흐름
     bool roleSelection();
