@@ -1,25 +1,42 @@
 #ifndef DISPLAY_H
 #define DISPLAY_H
 
+#ifndef USE_QT_DISPLAY
 #include <linux/fb.h>
+#endif
 #include <string>
 
 // Framebuffer를 사용한 디스플레이 제어
 class Display {
 private:
+#ifndef USE_QT_DISPLAY
     int fd;
     char *map;
     int size;
     int bytesPerPixel;
 
     bool pageFlipEnabled;
+    bool softwareDoubleBufferEnabled;
     bool inFrame;
     int frontPage;
     int backPage;
     int pageSizeBytes;
+    char *shadowBuffer;
     
     struct fb_var_screeninfo vinfo;
     struct fb_fix_screeninfo finfo;
+#else
+    // Qt backend에서는 실제 타입을 cpp에서만 다루기 위해 void*로 보관
+    void *qtApp;
+    void *qtWindow;
+    void *qtImage;
+    int width;
+    int height;
+    int bitsPerPixel;
+    bool pageFlipEnabled;
+    bool softwareDoubleBufferEnabled;
+    bool inFrame;
+#endif
     
     bool isInitialized;
     
@@ -32,9 +49,27 @@ public:
     void close_fb();
     
     // 화면 정보
-    int getWidth() const { return vinfo.xres; }
-    int getHeight() const { return vinfo.yres; }
-    int getBitsPerPixel() const { return vinfo.bits_per_pixel; }
+        int getWidth() const {
+    #ifndef USE_QT_DISPLAY
+        return vinfo.xres;
+    #else
+        return width;
+    #endif
+        }
+        int getHeight() const {
+    #ifndef USE_QT_DISPLAY
+        return vinfo.yres;
+    #else
+        return height;
+    #endif
+        }
+        int getBitsPerPixel() const {
+    #ifndef USE_QT_DISPLAY
+        return vinfo.bits_per_pixel;
+    #else
+        return bitsPerPixel;
+    #endif
+        }
     
     // 그리기 함수
     void drawRect(int x, int y, int w, int h, unsigned int color);
@@ -44,6 +79,7 @@ public:
     void beginFrame();
     void endFrame();
     bool isPageFlipEnabled() const { return pageFlipEnabled; }
+    bool isSoftwareDoubleBufferEnabled() const { return softwareDoubleBufferEnabled; }
     bool saveFrameToPPM(const std::string &path) const;
     
     // 편의 색상

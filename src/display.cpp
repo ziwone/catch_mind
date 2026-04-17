@@ -8,6 +8,11 @@
 #include <string.h>
 #include <fstream>
 
+static int wait_for_vsync(int fd) {
+    int arg = 0;
+    return ioctl(fd, FBIO_WAITFORVSYNC, &arg);
+}
+
 static bool getGlyph5x7(char ch, unsigned char out[7]) {
     memset(out, 0, 7);
     if (ch >= 'a' && ch <= 'z') {
@@ -74,10 +79,12 @@ Display::Display()
             size(0),
             bytesPerPixel(0),
             pageFlipEnabled(false),
+    softwareDoubleBufferEnabled(false),
             inFrame(false),
             frontPage(0),
             backPage(1),
             pageSizeBytes(0),
+    shadowBuffer(nullptr),
             isInitialized(false) {
 }
 
@@ -114,7 +121,7 @@ bool Display::init() {
     
     bytesPerPixel = vinfo.bits_per_pixel / 8;
     if (bytesPerPixel <= 0) {
-        std::fprintf(stderr, "[Display] Unsupported bpp=%d\n", vinfo.bits_per_pixel);
+        fprintf(stderr, "[Display] Unsupported bpp=%d\n", vinfo.bits_per_pixel);
         ::close(fd);
         return false;
     }
@@ -129,20 +136,30 @@ bool Display::init() {
     }
 
     if (ioctl(fd, FBIOPUT_VSCREENINFO, &requested) == 0) {
-        if (ioctl(fd, FBIOGET_VSCREENINFO, &vinfo) == 0) {
+        if (ioctl(fd, FBIOGET_VSCREENINFO, &vinfo) == 0 &&
+            ioctl(fd, FBIOGET_FSCREENINFO, &finfo) == 0) {
             int stride = finfo.line_length;
             int pageBytes = stride * (int)vinfo.yres;
-            if (vinfo.yres_virtual >= vinfo.yres * 2 && (int)finfo.smem_len >= pageBytes * 2) {
+            int possibleBuffers = pageBytes > 0 ? (int)(finfo.smem_len / pageBytes) : 0;
+
+            printf("[Display] virtual=%dx%d, smem=%u, possible_buffers=%d\n",
+                   vinfo.xres_virtual,
+                   vinfo.yres_virtual,
+                   finfo.smem_len,
+                   possibleBuffers);
+
+            if (vinfo.yres_virtual >= vinfo.yres * 2 &&
+                (int)finfo.smem_len >= pageBytes * 2) {
                 pageFlipEnabled = true;
                 pageSizeBytes = pageBytes;
-                std::printf("[Display] Page flip enabled (virtual y=%d)\n", vinfo.yres_virtual);
+                printf("[Display] Page flip enabled (yoffset pan)\n");
             }
         }
     }
 
     if (!pageFlipEnabled) {
         pageSizeBytes = finfo.line_length * (int)vinfo.yres;
-        std::printf("[Display] Page flip unavailable; single buffer mode\n");
+        printf("[Display] Page flip unavailable; single buffer mode\n");
     }
 
     // 5. 메모리 매핑
@@ -162,6 +179,16 @@ bool Display::init() {
         ioctl(fd, FBIOPAN_DISPLAY, &pan);
         frontPage = 0;
         backPage = 1;
+    } else {
+        // 하드웨어 page flip 미지원 시 소프트웨어 이중 버퍼 사용
+        shadowBuffer = (char *)malloc((size_t)pageSizeBytes);
+        if (shadowBuffer != nullptr) {
+            memcpy(shadowBuffer, map, (size_t)pageSizeBytes);
+            softwareDoubleBufferEnabled = true;
+            printf("[Display] Software double buffer enabled\n");
+        } else {
+            printf("[Display] Software double buffer allocation failed; pure single buffer\n");
+        }
     }
     
     isInitialized = true;
@@ -170,6 +197,10 @@ bool Display::init() {
 
 void Display::close_fb() {
     if (isInitialized) {
+        if (shadowBuffer != nullptr) {
+            free(shadowBuffer);
+            shadowBuffer = nullptr;
+        }
         if (map != nullptr) {
             munmap(map, size);
             map = nullptr;
@@ -216,7 +247,11 @@ void Display::drawPixel(int x, int y, unsigned int color) {
     }
 
     if (!pageFlipEnabled) {
-        writePixelToPage(map, vinfo, finfo, bytesPerPixel, 0, x, y, color);
+        if (inFrame && softwareDoubleBufferEnabled && shadowBuffer != nullptr) {
+            writePixelToPage(shadowBuffer, vinfo, finfo, bytesPerPixel, 0, x, y, color);
+        } else {
+            writePixelToPage(map, vinfo, finfo, bytesPerPixel, 0, x, y, color);
+        }
         return;
     }
 
@@ -230,28 +265,49 @@ void Display::drawPixel(int x, int y, unsigned int color) {
 }
 
 void Display::beginFrame() {
-    if (!pageFlipEnabled || inFrame || map == nullptr) {
+    if (inFrame || map == nullptr) {
         return;
     }
 
-    std::memcpy(map + backPage * pageSizeBytes,
-                map + frontPage * pageSizeBytes,
-                pageSizeBytes);
+    if (!pageFlipEnabled) {
+        if (softwareDoubleBufferEnabled && shadowBuffer != nullptr) {
+            memcpy(shadowBuffer, map, (size_t)pageSizeBytes);
+            inFrame = true;
+        }
+        return;
+    }
+
+    memcpy(map + backPage * pageSizeBytes,
+           map + frontPage * pageSizeBytes,
+           (size_t)pageSizeBytes);
     inFrame = true;
 }
 
 void Display::endFrame() {
-    if (!pageFlipEnabled || !inFrame) {
+    if (!inFrame) {
+        return;
+    }
+
+    if (!pageFlipEnabled) {
+        if (softwareDoubleBufferEnabled && shadowBuffer != nullptr) {
+            memcpy(map, shadowBuffer, (size_t)pageSizeBytes);
+        }
+        inFrame = false;
         return;
     }
 
     fb_var_screeninfo pan = vinfo;
+    if (wait_for_vsync(fd) != 0) {
+        // 일부 드라이버는 WAITFORVSYNC를 지원하지 않을 수 있다.
+    }
     pan.yoffset = backPage * (int)vinfo.yres;
     pan.activate = FB_ACTIVATE_NOW;
     if (ioctl(fd, FBIOPAN_DISPLAY, &pan) == 0) {
         int oldFront = frontPage;
         frontPage = backPage;
         backPage = oldFront;
+    } else {
+        perror("[Display] FBIOPAN_DISPLAY failed");
     }
     inFrame = false;
 }
