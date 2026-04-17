@@ -108,6 +108,7 @@ private:
     bool receiveDrawerSelected(std::string &senderIp);
     bool waitTouchReleasePoint(int &sx, int &sy, int timeoutMs);
     void showTransitionScreen(const std::string &line1, const std::string &line2, int durationMs);
+    void showTimeUpScreen(const std::string &answer, bool isDrawer);
     bool showConfirmDialog(const std::string &selectedText);
     bool waitForGameReady(int timeoutMs);
     bool selectFromTouchMenu(const std::string &title,
