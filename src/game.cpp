@@ -1007,17 +1007,20 @@ input_phase:
                     } else if (value.rfind("CORRECT_P", 0) == 0) {
                         int winner = std::stoi(value.substr(9));
                         if (winner == myPlayerNumber) {
+                            bgm.playOnce("/mnt/nfs/bgm/correct.wav");
                             isDrawerRole = true;
                             drawerIp.clear();
                             currentDrawerNodeId = nodeId;
                             showTransitionScreen("CORRECT!", "YOU ARE NEXT DRAWER", 2500);
                         } else {
+                            bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
                             isDrawerRole = false;
                             currentDrawerNodeId = senderNodeId;
                             showTransitionScreen("CORRECT!", "P" + std::to_string(winner) + " WINS", 2500);
                         }
                         return;
                     } else if (value == "WRONG_ALL") {
+                        bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
                         showTransitionScreen("TIME UP", "NO CORRECT ANSWER", 2000);
                         return;
                     }
@@ -1421,6 +1424,7 @@ void CatchMindGame::runSingleBoardRound() {
 
     auto judgeOk = [&](int playerNum) {
         drawJudgeButtonsFor(playerNum, false);
+        bgm.playOnce("/mnt/nfs/bgm/correct.wav");
         broadcastStatusMessage((playerNum == 1) ? "CORRECT_P1" : "CORRECT_P2");
         isDrawerRole = false;
         drawerIp.clear();
