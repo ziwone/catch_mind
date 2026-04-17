@@ -695,6 +695,39 @@ void CatchMindGame::runChallengerLiveRound() {
         queuedInkPoints.clear();
     };
 
+    // 상대 도전자 패널에 잉크 스트로크를 렌더링하기 위한 상태
+    bool otherStrokeActive = false;
+    int otherLastX = 0, otherLastY = 0;
+
+    auto drawOtherAnswerPoint = [&](int slot, int nx, int ny) {
+        int hw = screenW / 2;
+        int panelX = (slot == 1) ? 0 : hw;
+        int panelW = (slot == 1) ? hw : (screenW - hw);
+        int areaX = panelX + 8;
+        int areaY = bottomY + 24;
+        int areaW = std::max(10, panelW - 16);
+        int areaH = std::max(10, panelH - 24 - 40);
+        int sx = areaX + (nx * std::max(1, areaW - 1)) / 999;
+        int sy = areaY + (ny * std::max(1, areaH - 1)) / 999;
+        if (!otherStrokeActive) {
+            display->drawRect(sx - 2, sy - 2, 5, 5, Display::COLOR_WHITE);
+            otherLastX = sx;
+            otherLastY = sy;
+            otherStrokeActive = true;
+            return;
+        }
+        int dx = sx - otherLastX, dy = sy - otherLastY;
+        int steps = std::max(std::abs(dx), std::abs(dy));
+        if (steps < 1) steps = 1;
+        for (int i = 1; i <= steps; ++i) {
+            int px = otherLastX + (dx * i) / steps;
+            int py = otherLastY + (dy * i) / steps;
+            display->drawRect(px - 2, py - 2, 5, 5, Display::COLOR_WHITE);
+        }
+        otherLastX = sx;
+        otherLastY = sy;
+    };
+
     auto redrawPanels = [&]() {
         paintAnswerPanel(1, 0x102336);
         paintAnswerPanel(2, 0x2a1b21);
@@ -785,21 +818,40 @@ input_phase:
                     }
                 } else if (kind == "CLEAR") {
                     display->drawRect(canvasX, canvasY, canvasW, canvasH, Display::COLOR_BLACK);
+                } else if (kind == "A_POINT") {
+                    // 상대 도전자의 잉크 획을 해당 패널에 렌더링
+                    std::stringstream parse(value);
+                    std::string pnStr, nxStr, nyStr;
+                    if (std::getline(parse, pnStr, ',') && std::getline(parse, nxStr, ',') && std::getline(parse, nyStr, ',')) {
+                        try {
+                            int nx = std::stoi(nxStr);
+                            int ny = std::stoi(nyStr);
+                            int senderBoardNum = getPlayerNumberFromIp(senderIp);
+                            int drawerBoardNum = getPlayerNumberFromIp(drawerIp);
+                            int slot = getChallengerSlotByDrawer(senderBoardNum, drawerBoardNum);
+                            if (slot != myPlayerNumber && (slot == 1 || slot == 2)) {
+                                drawOtherAnswerPoint(slot, nx, ny);
+                            }
+                        } catch (...) {}
+                    }
+                } else if (kind == "A_UP") {
+                    otherStrokeActive = false;
                 } else if (kind == "ANSWER") {
                     auto sep = value.find(':');
                     if (sep != std::string::npos) {
                         int pn = std::stoi(value.substr(0, sep));
-                        // 송신자의 보드 IP 기준으로 P1/P2를 재보정해 표시 불일치 방지
                         int senderBoardNum = getPlayerNumberFromIp(senderIp);
                         int drawerBoardNum = getPlayerNumberFromIp(drawerIp);
                         int pnByIp = getChallengerSlotByDrawer(senderBoardNum, drawerBoardNum);
-                        if (pnByIp == 1 || pnByIp == 2) {
-                            pn = pnByIp;
-                        }
+                        if (pnByIp == 1 || pnByIp == 2) pn = pnByIp;
                         std::string ans = value.substr(sep + 1);
                         if (pn == 1) { receivedAnswer1 = ans; answerReceived1 = true; }
                         if (pn == 2) { receivedAnswer2 = ans; answerReceived2 = true; }
-                        redrawPanels();
+                        // redrawPanels() 대신 "SUBMITTED" 표시만 추가 (잉크 획 유지)
+                        int hw = screenW / 2;
+                        int pnlX = (pn == 1) ? 4 : hw + 4;
+                        display->drawRect(pnlX, bottomY + 4, 90, 16, ui::OK);
+                        display->drawText(pnlX + 4, bottomY + 6, "SUBMITTED", 0x071a0e, 1);
                         std::cout << "[도전자P" << myPlayerNumber << "] P" << pn << " 답변 수신: " << ans << "\n";
                     }
                 } else if (kind == "STATUS" && value == "JUDGING_ACTIVE") {
@@ -987,6 +1039,23 @@ input_phase:
                                 display->drawRect(sx - 2, sy - 2, 5, 5, color);
                         } catch (...) {}
                     }
+                } else if (kind == "A_POINT") {
+                    std::stringstream parse(value);
+                    std::string pnStr, nxStr, nyStr;
+                    if (std::getline(parse, pnStr, ',') && std::getline(parse, nxStr, ',') && std::getline(parse, nyStr, ',')) {
+                        try {
+                            int nx = std::stoi(nxStr);
+                            int ny = std::stoi(nyStr);
+                            int senderBoardNum = getPlayerNumberFromIp(senderIp);
+                            int drawerBoardNum = getPlayerNumberFromIp(drawerIp);
+                            int slot = getChallengerSlotByDrawer(senderBoardNum, drawerBoardNum);
+                            if (slot != myPlayerNumber && (slot == 1 || slot == 2)) {
+                                drawOtherAnswerPoint(slot, nx, ny);
+                            }
+                        } catch (...) {}
+                    }
+                } else if (kind == "A_UP") {
+                    otherStrokeActive = false;
                 } else if (kind == "ANSWER") {
                     auto sep = value.find(':');
                     if (sep != std::string::npos) {
@@ -994,13 +1063,14 @@ input_phase:
                         int senderBoardNum = getPlayerNumberFromIp(senderIp);
                         int drawerBoardNum = getPlayerNumberFromIp(drawerIp);
                         int pnByIp = getChallengerSlotByDrawer(senderBoardNum, drawerBoardNum);
-                        if (pnByIp == 1 || pnByIp == 2) {
-                            pn = pnByIp;
-                        }
+                        if (pnByIp == 1 || pnByIp == 2) pn = pnByIp;
                         std::string ans = value.substr(sep + 1);
                         if (pn == 1) { receivedAnswer1 = ans; answerReceived1 = true; }
                         if (pn == 2) { receivedAnswer2 = ans; answerReceived2 = true; }
-                        redrawPanels();
+                        int hw = screenW / 2;
+                        int pnlX = (pn == 1) ? 4 : hw + 4;
+                        display->drawRect(pnlX, bottomY + 4, 90, 16, ui::OK);
+                        display->drawText(pnlX + 4, bottomY + 6, "SUBMITTED", 0x071a0e, 1);
                     }
                 }
             }

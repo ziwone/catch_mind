@@ -15,13 +15,12 @@ echo "  대상: ${WORK_DIR}"
 # 1. 작업 디렉토리 생성
 sudo mkdir -p "${WORK_DIR}"
 
-# 2. rsync로 동기화 (공유폴더의 모든 파일 복사)
+# 2. rsync로 동기화 (공유폴더 전체 복사)
+#    bgm, build 등 모든 하위 폴더/파일을 포함한다.
 sudo rsync -av --delete \
-    ${SHARED_DIR}/src \
-    ${SHARED_DIR}/include \
-    ${SHARED_DIR}/Makefile \
-    ${SHARED_DIR}/CMakeLists.txt \
-    ${SHARED_DIR}/*.md \
+    --exclude='.git/' \
+    --exclude='.vscode/' \
+    ${SHARED_DIR}/ \
     ${WORK_DIR}/
 
 echo ""
@@ -36,6 +35,12 @@ if [[ ! -f "${TARGET_NAME}" ]]; then
 fi
 
 sudo cp "${TARGET_NAME}" /nfsroot/
+
+# bgm 폴더가 있으면 /nfsroot/bgm/ 으로 복사
+if [[ -d "${WORK_DIR}/bgm" ]]; then
+    echo "  bgm 폴더 복사: /nfsroot/bgm/"
+    sudo rsync -av --delete "${WORK_DIR}/bgm/" /nfsroot/bgm/
+fi
 
 echo ""
 echo "=== 완료! ==="
