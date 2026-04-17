@@ -894,9 +894,9 @@ input_phase:
                     std::string revealedAnswer;
                     auto sep = value.find('#');
                     if (sep != std::string::npos) revealedAnswer = value.substr(sep + 1);
+                    bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
                     showTimeUpScreen(revealedAnswer, false);
                     return;
-                } else if (kind == "STATUS" && value == "JUDGING_ACTIVE") {
                     submitLocked = true;
                     redrawSubmitOnly();
                 } else if (kind == "STATUS" && value == "JUDGING_END") {
@@ -1050,6 +1050,7 @@ input_phase:
                         std::string revealedAnswer;
                         auto sep = value.find('#');
                         if (sep != std::string::npos) revealedAnswer = value.substr(sep + 1);
+                        bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
                         showTimeUpScreen(revealedAnswer, false);
                         return;
                     } else if (value == "ROUND_END") {
@@ -1058,6 +1059,7 @@ input_phase:
                     } else if ((value == "RETRY_P1" && myPlayerNumber == 1) ||
                                (value == "RETRY_P2" && myPlayerNumber == 2)) {
                         std::cout << "[도전자P" << myPlayerNumber << "] NG 판정 -> 입력창 초기화 후 재작성\n";
+                        bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
                         myAnswerInput.clear();
                         answerInkWritten = false;
                         answerStrokeActive = false;
@@ -1498,6 +1500,7 @@ void CatchMindGame::runSingleBoardRound() {
     };
 
     auto judgeNg = [&](int playerNum) {
+        bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
         if (playerNum == 1) {
             receivedAnswer1.clear();
             answerReceived1 = false;
