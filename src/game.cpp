@@ -657,7 +657,6 @@ void CatchMindGame::runChallengerLiveRound() {
     // 도전자 화면 레이아웃 (출제자와 동일: 좌상단 정보 패널 + 우상단 캔버스)
     isDrawing = false;
     drawGameLayout();
-    resetCanvas();
 
     // 도전자 타이머: 라운드 진입 시점부터 측정
     auto challengerRoundStart = std::chrono::steady_clock::now();
@@ -793,7 +792,9 @@ void CatchMindGame::runChallengerLiveRound() {
 
     std::cout << "[도전자P" << myPlayerNumber << "] 그림 수신 시작\n";
     std::cout << "  터치로 본인 패널에 답 작성 후 submit / 키보드: submit, q\n";
+    display->beginFrame();
     redrawPanels();
+    display->endFrame();
 
 input_phase:
     submitted = false;
@@ -1366,7 +1367,7 @@ void CatchMindGame::runSingleBoardRound() {
     answerReceived2 = false;
 
     drawGameLayout();
-    resetCanvas();
+    display->beginFrame();
 
     player1LatestAnswer.clear();
     player2LatestAnswer.clear();
@@ -1494,6 +1495,7 @@ void CatchMindGame::runSingleBoardRound() {
 
     drawBrushDot(cursorX, cursorY);
     drawDrawerTools();
+    display->endFrame();
 
     std::string line;
     bool judgingActive = false;
