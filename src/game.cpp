@@ -139,7 +139,7 @@ void CatchMindGame::drawStatus() {
 }
 
 void CatchMindGame::start() {
-    bgm.setVolume(50);
+    bgm.setVolume(80);
     bgm.play("/mnt/nfs/bgm/maple1.wav");
 
     std::cout << "=====================================\n";
