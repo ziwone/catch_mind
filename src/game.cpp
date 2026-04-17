@@ -109,7 +109,13 @@ std::string toDisplayLabel(const std::string &text) {
 CatchMindGame::CatchMindGame() {
     std::random_device rd;
     rng.seed(rd());
-    nodeId = std::to_string(rd()) + "-" + std::to_string(getpid());
+    myLocalIp = getLocalIpAddress();
+    int mappedPlayer = getPlayerNumberFromIp(myLocalIp);
+    if (mappedPlayer >= 1 && mappedPlayer <= 3) {
+        nodeId = "PLAYER" + std::to_string(mappedPlayer);
+    } else {
+        nodeId = std::to_string(rd()) + "-" + std::to_string(getpid());
+    }
 
     wordBank["동물"] = {"고양이", "강아지", "토끼", "호랑이", "코끼리", "사자"};
     wordBank["과일"] = {"사과", "바나나", "포도", "오렌지", "멜론", "복숭아"};
@@ -912,6 +918,8 @@ input_phase:
                     bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
                     showTimeUpScreen(revealedAnswer, false);
                     return;
+                } else if (kind == "STATUS" && value == "JUDGING_ACTIVE") {
+                    // 다른 참여자의 제출을 출제자가 판정 중이면 즉시 submit 잠금
                     submitLocked = true;
                     redrawSubmitOnly();
                 } else if (kind == "STATUS" && value == "JUDGING_END") {
@@ -3149,8 +3157,27 @@ void CatchMindGame::showFinalScores() {
         unsigned int rc = rankColor[i];
         drawPanelCard(display, cx - 210, y, 420, 56, rc, ui::CARD, ui::BG_MID);
         display->drawText(cx - 200, y + 18, rankLabel[i], rc, 2);
-        std::string label = (sorted[i].second == nodeId) ? "YOU" : sorted[i].second;
-        if (label.size() > 14) label = label.substr(label.size() - 14);
+
+        int playerNum = 0;
+        const std::string &id = sorted[i].second;
+        if (id.rfind("PLAYER", 0) == 0) {
+            try {
+                playerNum = std::stoi(id.substr(6));
+            } catch (...) {
+                playerNum = 0;
+            }
+        }
+
+        std::string label;
+        if (playerNum >= 1 && playerNum <= 3) {
+            label = "Player " + std::to_string(playerNum);
+        } else {
+            label = id;
+        }
+        if (id == nodeId) {
+            label += " (YOU)";
+        }
+        if (label.size() > 18) label = label.substr(label.size() - 18);
         display->drawText(cx - 140, y + 18, label.c_str(), ui::TEXT_MAIN, 2);
         std::string scoreStr = std::to_string(sorted[i].first) + " pts";
         drawTextCentered(display, cx + 150, y + 18, scoreStr.c_str(), rc, 2);
