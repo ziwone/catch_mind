@@ -2,6 +2,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <signal.h>
 #include <sys/wait.h>
@@ -11,7 +12,18 @@
 static const char *ALSA_SH    = "/mnt/nfs/alsa.sh";
 static const char *APLAY_BIN  = "/mnt/nfs/aplay";
 static const char *AMIXER_BIN = "/mnt/nfs/amixer";
-static const char *AUDIO_DEV  = "hw:3,0";
+// 카드 번호 플래그 파일: echo 3 > /nfsroot/alsa_card 처럼 숫자를 쓰면 해당 카드 사용
+// 파일이 없으면 기본값 0 사용
+static const char *ALSA_CARD_FILE = "/mnt/nfs/alsa_card";
+
+static int readAlsaCard() {
+    std::ifstream f(ALSA_CARD_FILE);
+    int card = 0;  // 기본값
+    if (f.is_open()) {
+        f >> card;
+    }
+    return card;
+}
 
 BgmPlayer::BgmPlayer()  {}
 BgmPlayer::~BgmPlayer() { stop(); }
@@ -20,11 +32,12 @@ void BgmPlayer::setVolume(int percent) {
     if (percent < 0)   percent = 0;
     if (percent > 100) percent = 100;
 
-    // ". alsa.sh && amixer -c 3 cset numid=1 50%" 형태로 실행
+    int card = readAlsaCard();
     const std::string cmd =
         std::string(". ") + ALSA_SH +
         " && " + AMIXER_BIN +
-        " -c 3 cset numid=1 " + std::to_string(percent) + "%";
+        " -c " + std::to_string(card) +
+        " cset numid=1 " + std::to_string(percent) + "%";
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -55,11 +68,14 @@ void BgmPlayer::stop() {
 }
 
 void BgmPlayer::threadFunc() {
-    // alsa.sh를 source한 뒤 aplay 실행 — 테스트와 동일한 환경
+    int card = readAlsaCard();
+    std::string audioDev = "hw:" + std::to_string(card) + ",0";
+    std::cout << "[BGM] ALSA card=" << card << " (" << ALSA_CARD_FILE << ")\n";
+
     const std::string cmd =
         std::string(". ") + ALSA_SH +
         " && " + APLAY_BIN +
-        " -D" + AUDIO_DEV +
+        " -D" + audioDev +
         " " + filePath;
 
     while (running) {
@@ -70,13 +86,11 @@ void BgmPlayer::threadFunc() {
         }
 
         if (pid == 0) {
-            // 자식: sh -c "source alsa.sh && aplay -Dhw:0,0 <file>"
             execl("/bin/sh", "sh", "-c", cmd.c_str(), nullptr);
             std::cerr << "[BGM] execl 실패: " << strerror(errno) << "\n";
             _exit(1);
         }
 
-        // 부모: aplay 종료 대기 (곡 끝나면 running이 true인 동안 반복)
         childPid.store(pid);
         int status = 0;
         waitpid(pid, &status, 0);
