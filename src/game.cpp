@@ -2122,13 +2122,17 @@ void CatchMindGame::showTimeUpScreen(const std::string &answer, bool isDrawer) {
     std::vector<std::string> readyNodes;
     const int OTHERS_NEEDED = isDrawer ? 2 : 1; // 출제자: 도전자2명, 도전자: 상대 도전자1명
 
-    while ((!myConfirmed || othersReady < OTHERS_NEEDED) && !roundEndReceived) {
+    auto sendReadyIfNeeded = [&]() {
         if (!isDrawer && myConfirmed && !readySent) {
             broadcastStatusMessage("READY_NEXT");
             readySent = true;
             drawPanelCard(display, btnX, btnY, btnW, btnH, ui::TEXT_DIM, 0x2b3138, 0x2b3138);
             drawTextCentered(display, cx, btnY + 14, "CONFIRMED", ui::TEXT_DIM, 1);
         }
+    };
+
+    while ((!myConfirmed || othersReady < OTHERS_NEEDED || (!isDrawer && !readySent)) && !roundEndReceived) {
+        sendReadyIfNeeded();
 
         // 대기 중 표시 업데이트
         display->drawRect(cx - 150, waitY, 300, 24, ui::BG_DARK);
@@ -2191,6 +2195,7 @@ void CatchMindGame::showTimeUpScreen(const std::string &answer, bool isDrawer) {
                         if (mapTouchToScreen(touchRawX, touchRawY, sx, sy)) {
                             if (sx >= btnX && sx < btnX + btnW && sy >= btnY && sy < btnY + btnH) {
                                 myConfirmed = true;
+                                sendReadyIfNeeded();
                             }
                         }
                     }
@@ -2204,6 +2209,7 @@ void CatchMindGame::showTimeUpScreen(const std::string &answer, bool isDrawer) {
             if (line == "q") break;
             if (!myConfirmed && (line == "confirm" || line == "c" || line == "ok")) {
                 myConfirmed = true;
+                sendReadyIfNeeded();
             }
         }
     }
