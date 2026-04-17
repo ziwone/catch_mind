@@ -148,6 +148,8 @@ bool CatchMindGame::initDisplay() {
 void CatchMindGame::drawGameLayout() {
     if (display == nullptr) return;
 
+    display->beginFrame();
+
     display->clearScreen(ui::BG_DARK);
 
     // 출제자: 좌상단 정보 패널 + 우상단 큰 캔버스
@@ -209,6 +211,7 @@ void CatchMindGame::drawGameLayout() {
     display->drawText(halfW + 10, bottomY + 8, "P2", ui::TEXT_MAIN, 2);
 
     drawStatus();
+    display->endFrame();
 }
 
 void CatchMindGame::drawStatus() {
@@ -2094,6 +2097,8 @@ void CatchMindGame::closeRoleSocket() {
 void CatchMindGame::showTimeUpScreen(const std::string &answer, bool isDrawer) {
     if (display == nullptr) return;
 
+    display->beginFrame();
+
     // 정답 공개 화면 그리기
     display->clearScreen(ui::BG_DARK);
     int cx = screenW / 2;
@@ -2120,6 +2125,7 @@ void CatchMindGame::showTimeUpScreen(const std::string &answer, bool isDrawer) {
     // 대기 상태 텍스트 영역
     int waitY = btnY + btnH + 16;
     display->drawText(cx - 120, waitY, "Tap confirm to continue", ui::TEXT_DIM, 1);
+    display->endFrame();
 
     bool myConfirmed = isDrawer; // 출제자는 로컬 확인 없이 진행
     bool readySent = false;
@@ -2134,6 +2140,7 @@ void CatchMindGame::showTimeUpScreen(const std::string &answer, bool isDrawer) {
             readySent = true;
             drawPanelCard(display, btnX, btnY, btnW, btnH, ui::TEXT_DIM, 0x2b3138, 0x2b3138);
             drawTextCentered(display, cx, btnY + 14, "CONFIRMED", ui::TEXT_DIM, 1);
+            display->endFrame();
         }
     };
 
@@ -2224,6 +2231,7 @@ void CatchMindGame::showTimeUpScreen(const std::string &answer, bool isDrawer) {
     display->clearScreen(ui::BG_DARK);
     drawTextCentered(display, cx, screenH / 2 - 10, "ALL CONFIRMED", ui::OK, 2);
     drawTextCentered(display, cx, screenH / 2 + 20, "Next Round...", ui::TEXT_DIM, 1);
+    display->endFrame();
     usleep(1200000);
 }
 
@@ -2232,6 +2240,8 @@ void CatchMindGame::showTransitionScreen(const std::string &line1, const std::st
         usleep(durationMs * 1000);
         return;
     }
+
+    display->beginFrame();
 
     display->clearScreen(ui::BG_DARK);
 
@@ -2247,6 +2257,7 @@ void CatchMindGame::showTransitionScreen(const std::string &line1, const std::st
 
     drawTextCentered(display, cx, by + bh / 4 - 10, line1, ui::TEXT_MAIN, 3);
     drawTextCentered(display, cx, by + bh * 3 / 4 - 7, line2, ui::TEXT_DIM, 2);
+    display->endFrame();
 
     usleep(durationMs * 1000);
 }

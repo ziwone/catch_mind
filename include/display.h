@@ -10,6 +10,13 @@ private:
     int fd;
     char *map;
     int size;
+    int bytesPerPixel;
+
+    bool pageFlipEnabled;
+    bool inFrame;
+    int frontPage;
+    int backPage;
+    int pageSizeBytes;
     
     struct fb_var_screeninfo vinfo;
     struct fb_fix_screeninfo finfo;
@@ -34,6 +41,9 @@ public:
     void clearScreen(unsigned int color = 0x000000);
     void drawPixel(int x, int y, unsigned int color);
     void drawText(int x, int y, const std::string &text, unsigned int color, int scale = 2);
+    void beginFrame();
+    void endFrame();
+    bool isPageFlipEnabled() const { return pageFlipEnabled; }
     bool saveFrameToPPM(const std::string &path) const;
     
     // 편의 색상
