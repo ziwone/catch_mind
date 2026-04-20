@@ -417,7 +417,7 @@ bool Display::saveFrameToPPM(const std::string &path) const {
     return true;
 }
 
-bool Display::drawPNG(const std::string &path, int dstX, int dstY, int dstW, int dstH) {
+bool Display::drawPNG(const std::string &path, int dstX, int dstY, int dstW, int dstH, bool skipWhite) {
     if (!isInitialized || dstW <= 0 || dstH <= 0) return false;
 
     // PPM P6 포맷 로더 (deploy.sh에서 PNG→PPM 변환한 파일을 읽음)
@@ -468,6 +468,8 @@ bool Display::drawPNG(const std::string &path, int dstX, int dstY, int dstW, int
             unsigned int color = ((unsigned int)px[0] << 16) |
                                  ((unsigned int)px[1] << 8)  |
                                   (unsigned int)px[2];
+            // skipWhite: 흰 배경(R>235 && G>235 && B>235) 픽셀은 투명 처리
+            if (skipWhite && px[0] > 235 && px[1] > 235 && px[2] > 235) continue;
             drawPixel(dstX + dx, dstY + dy, color);
         }
     }

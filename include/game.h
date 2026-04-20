@@ -10,7 +10,7 @@
 
 class CatchMindGame {
 private:
-    static constexpr int MAX_ROUNDS = 5;
+    static constexpr int MAX_ROUNDS = 3;
     int round = 0;
     bool isDrawing = false;
     Display *display = nullptr;

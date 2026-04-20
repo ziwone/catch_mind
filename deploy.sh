@@ -50,62 +50,8 @@ if [[ -d "${WORK_DIR}/img" ]]; then
         [ -f "$f" ] || continue
         base=$(basename "${f%.png}")
         outfile="/nfsroot/img/${base}.ppm"
-        echo "  변환: $f -> $outfile"
-        if command -v convert &>/dev/null; then
-            sudo convert "$f" -compress none "$outfile" && echo "  [OK] ImageMagick"
-        elif command -v ffmpeg &>/dev/null; then
-            sudo ffmpeg -y -i "$f" "$outfile" 2>&1 | tail -1 && echo "  [OK] ffmpeg"
-        elif command -v python3 &>/dev/null; then
-            sudo python3 - "$f" "$outfile" <<'PYEOF'
-import sys
-# stdlib only: read PNG via zlib
-import struct, zlib
-def read_png_to_ppm(src, dst):
-    with open(src, 'rb') as f:
-        data = f.read()
-    assert data[:8] == b'\x89PNG\r\n\x1a\n', "not PNG"
-    i = 8
-    chunks = {}
-    raw_idat = b''
-    while i < len(data):
-        length = struct.unpack('>I', data[i:i+4])[0]
-        ctype  = data[i+4:i+8]
-        cdata  = data[i+8:i+8+length]
-        i += 12 + length
-        if ctype == b'IHDR':
-            chunks['IHDR'] = cdata
-        elif ctype == b'IDAT':
-            raw_idat += cdata
-        elif ctype == b'IEND':
-            break
-    w, h, bd, ct = struct.unpack('>IIBB', chunks['IHDR'][:10])
-    assert bd == 8 and ct == 2, f"only RGB8 PNG supported (bd={bd} ct={ct})"
-    raw = zlib.decompress(raw_idat)
-    stride = w * 3 + 1
-    pixels = bytearray()
-    for row in range(h):
-        ftype = raw[row * stride]
-        row_data = bytearray(raw[row * stride + 1 : row * stride + 1 + w * 3])
-        if ftype == 0:
-            pass
-        elif ftype == 1:
-            for k in range(3, len(row_data)):
-                row_data[k] = (row_data[k] + row_data[k-3]) & 0xff
-        elif ftype == 2 and row > 0:
-            prev = pixels[(row-1)*w*3 : row*w*3]
-            for k in range(len(row_data)):
-                row_data[k] = (row_data[k] + prev[k]) & 0xff
-        pixels += row_data
-    with open(dst, 'wb') as f:
-        f.write(f'P6\n{w} {h}\n255\n'.encode())
-        f.write(bytes(pixels))
-    print(f"  [OK] python3 {w}x{h}")
-read_png_to_ppm(sys.argv[1], sys.argv[2])
-PYEOF
-        else
-            echo "  WARNING: 변환 도구 없음 (convert/ffmpeg/python3 필요)"
-        fi
-        # 결과 확인
+        echo "  변환: $(basename $f) -> ${base}.ppm"
+        sudo python3 "${WORK_DIR}/scripts/png2ppm.py" "$f" "$outfile"
         if [[ -f "$outfile" ]]; then
             echo "  생성됨: $(ls -lh $outfile | awk '{print $5, $9}')"
         else

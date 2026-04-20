@@ -1,6 +1,7 @@
 #include "game.h"
 #include <algorithm>
 #include <chrono>
+#include <set>
 #include <arpa/inet.h>
 #include <cctype>
 #include <cerrno>
@@ -21,19 +22,71 @@
 namespace {
 
 namespace ui {
-constexpr unsigned int BG_DARK = 0x07060f;
-constexpr unsigned int BG_MID = 0x130a24;
-constexpr unsigned int CARD = 0x1a1133;
-constexpr unsigned int CARD_ALT = 0x261448;
-constexpr unsigned int STROKE = 0x4d2c80;
-constexpr unsigned int ACCENT = 0x00ffd5;
-constexpr unsigned int ACCENT_WARM = 0xffc83d;
-constexpr unsigned int TEXT_MAIN = 0xf4f6ff;
-constexpr unsigned int TEXT_DIM = 0xa996d0;
-constexpr unsigned int P1_ACCENT = 0x32c8ff;
-constexpr unsigned int P2_ACCENT = 0xff5ea8;
-constexpr unsigned int OK = 0x57ff9a;
-constexpr unsigned int NG = 0xff657a;
+// 초록/파랑/핑크 버블 테마
+constexpr unsigned int BG_DARK    = 0x041810;
+constexpr unsigned int BG_MID     = 0x07251a;
+constexpr unsigned int CARD       = 0x0b2e20;
+constexpr unsigned int CARD_ALT   = 0x0e3a2a;
+constexpr unsigned int STROKE     = 0x1a7a55;
+constexpr unsigned int ACCENT     = 0x00ffd5;
+constexpr unsigned int ACCENT_WARM= 0xff5ea8;
+constexpr unsigned int TEXT_MAIN  = 0xf0fff8;
+constexpr unsigned int TEXT_DIM   = 0x7ecfaa;
+constexpr unsigned int P1_ACCENT  = 0x32c8ff;
+constexpr unsigned int P2_ACCENT  = 0xff5ea8;
+constexpr unsigned int OK         = 0x00e87a;
+constexpr unsigned int NG         = 0xff4d7a;
+}
+constexpr int TIMER_BAR_H = 28;  // full-width timer bar height
+
+// 화면 스타일별 절차적 배경 생성
+// style 0: 메뉴  1: 확인  2: 게임오버  3: 트랜지션
+static void drawBg(Display *display, int screenW, int screenH, int style) {
+    if (display == nullptr) return;
+
+    // 스타일별 상단/하단 색 (그라디언트 근사)
+    unsigned int topColor, midColor, botColor;
+    if (style == 0) {
+        // 메뉴/로비: 딥 그린 → 틸 그라디언트
+        topColor = 0x041c14; midColor = 0x073d28; botColor = 0x041810;
+    } else if (style == 1) {
+        // 확인: 딥 블루-그린
+        topColor = 0x041220; midColor = 0x0a2840; botColor = 0x041018;
+    } else if (style == 2) {
+        // 게임오버: 딥 핑크-다크
+        topColor = 0x200818; midColor = 0x3a0f28; botColor = 0x180510;
+    } else {
+        // 트랜지션: 뉴트럴 다크 그린
+        topColor = 0x050f0a; midColor = 0x0a1e14; botColor = 0x050f0a;
+    }
+
+    int h3 = screenH / 3;
+    // 상단
+    for (int y = 0; y < h3; ++y) {
+        unsigned int r = ((topColor>>16)&0xff) + (int)(((midColor>>16)&0xff) - (int)((topColor>>16)&0xff)) * y / h3;
+        unsigned int g = ((topColor>>8)&0xff)  + (int)(((midColor>>8)&0xff)  - (int)((topColor>>8)&0xff))  * y / h3;
+        unsigned int b = (topColor&0xff)        + (int)((midColor&0xff)        - (int)(topColor&0xff))        * y / h3;
+        display->drawRect(0, y, screenW, 1, (r<<16)|(g<<8)|b);
+    }
+    // 하단
+    for (int y = h3; y < screenH; ++y) {
+        int t = y - h3;
+        int span = screenH - h3;
+        unsigned int r = ((midColor>>16)&0xff) + (int)(((botColor>>16)&0xff) - (int)((midColor>>16)&0xff)) * t / span;
+        unsigned int g = ((midColor>>8)&0xff)  + (int)(((botColor>>8)&0xff)  - (int)((midColor>>8)&0xff))  * t / span;
+        unsigned int b = (midColor&0xff)        + (int)((botColor&0xff)        - (int)(midColor&0xff))        * t / span;
+        display->drawRect(0, y, screenW, 1, (r<<16)|(g<<8)|b);
+    }
+
+    // 버블 장식 (원 대신 작은 사각형 도트)
+    unsigned int dotColor = (style == 2) ? 0xff4d7a : (style == 1) ? 0x32c8ff : 0x00e87a;
+    const int bx[] = {60,200,400,650,880,130,500,760,40,300,570,820};
+    const int by[] = {20,50,15,40,25,100,80,55,140,120,150,100};
+    for (int i = 0; i < 12; ++i) {
+        int sz = (i % 3 == 0) ? 6 : (i % 3 == 1) ? 4 : 3;
+        display->drawRect(bx[i], by[i], sz, sz, dotColor);
+        display->drawRect(bx[i]+1, by[i]-1, sz-2, 1, 0xffffff);
+    }
 }
 
 void drawPanelCard(Display *display,
@@ -167,8 +220,8 @@ void CatchMindGame::drawGameLayout() {
     int topRatioPct = isDrawerRole ? 70 : 56;
     topH = (screenH * topRatioPct) / 100;
     topH = std::max(140, std::min(screenH - 90, topH));
-    bottomY = topH;
-    panelH = screenH - topH;
+    bottomY = topH + TIMER_BAR_H;
+    panelH = screenH - bottomY;
 
     // 캔버스 영역 (우상단, 정보 패널 우측)
     canvasX = infoPanelW + padding;
@@ -191,10 +244,10 @@ void CatchMindGame::drawGameLayout() {
 
     if (isDrawerRole) {
         display->drawRect(canvasX + 8, canvasY + 8, 96, 24, ui::ACCENT_WARM);
-        display->drawText(canvasX + 14, canvasY + 14, "DRAWER", 0x2a2110, 1);
+        display->drawText(canvasX + 14, canvasY + 14, "DRAWER", 0xFFE000, 1);
     } else {
         display->drawRect(canvasX + 8, canvasY + 8, 122, 24, ui::ACCENT);
-        display->drawText(canvasX + 14, canvasY + 14, "CHALLENGER", 0x102822, 1);
+        display->drawText(canvasX + 14, canvasY + 14, "CHALLENGER", 0xFFE000, 1);
     }
 
     // 커서 위치 보정
@@ -210,7 +263,10 @@ void CatchMindGame::drawGameLayout() {
     drawPanelCard(display, 0, bottomY, halfW, panelH, ui::P1_ACCENT, ui::CARD_ALT, 0x102336);
     drawPanelCard(display, halfW, bottomY, screenW - halfW, panelH, ui::P2_ACCENT, ui::CARD_ALT, 0x2a1b21);
 
-    display->drawRect(0, bottomY - 3, screenW, 3, ui::STROKE);
+    // 전체 폭 타이머 바 배경 (캔버스 하단 ~ 하단 패널 사이)
+    display->drawRect(0, topH, screenW, TIMER_BAR_H, 0x0a1810);
+    display->drawRect(0, topH, screenW, 1, ui::STROKE);
+    display->drawRect(0, topH + TIMER_BAR_H - 1, screenW, 1, ui::STROKE);
     display->drawRect(halfW - 1, bottomY, 2, panelH, ui::STROKE);
 
     display->drawText(10, bottomY + 8, "P1", ui::TEXT_MAIN, 2);
@@ -248,6 +304,13 @@ void CatchMindGame::start() {
         return;
     }
 
+    // 모든 보드가 READY 된 후 점수 초기화 (3명 전원 0으로 등록하여 최종화면 누락 방지)
+    gameScores.clear();
+    gameScores["PLAYER1"] = 0;
+    gameScores["PLAYER2"] = 0;
+    gameScores["PLAYER3"] = 0;
+    round = 0;
+
     while (round < MAX_ROUNDS) {
         if (!roleSelection()) {
             stop();
@@ -267,11 +330,12 @@ void CatchMindGame::start() {
         std::cout << "[시스템] 역할 선택 화면으로 복귀 (라운드 " << round << "/" << MAX_ROUNDS << ")\n\n";
     }
 
+    // 모든 라운드 종료 - 다른 보드에 GAME_OVER 브로드캐스트
+    broadcastStatusMessage("GAME_OVER");
     showFinalScores();
 }
 
 void CatchMindGame::stop() {
-    // TTY 커서 복원
     printf("\033[?25h");
     fflush(stdout);
 
@@ -315,8 +379,8 @@ bool CatchMindGame::roleSelection() {
 
     drawPanelCard(display, drawerX - 5, boxY - 5, boxW + 10, boxH + 10, ui::ACCENT_WARM, 0x3a2f1a, 0x2a2317);
     drawPanelCard(display, challengerX - 5, boxY - 5, boxW + 10, boxH + 10, ui::ACCENT, 0x1a3a35, 0x15302c);
-    drawTextCentered(display, drawerX + (boxW / 2), boxY + (boxH / 2) - 14, "DRAWER", ui::TEXT_MAIN, 3);
-    drawTextCentered(display, challengerX + (boxW / 2), boxY + (boxH / 2) - 10, "CHALLENGER", ui::TEXT_MAIN, 2);
+    drawTextCentered(display, drawerX + (boxW / 2), boxY + (boxH / 2) - 14, "DRAWER", 0xFFE000, 3);
+    drawTextCentered(display, challengerX + (boxW / 2), boxY + (boxH / 2) - 10, "CHALLENGER", 0xFFE000, 2);
     display->endFrame();
 
     std::cout << "[역할] 좌측 터치=출제자, 우측 터치=도전자\n";
@@ -371,6 +435,12 @@ bool CatchMindGame::roleSelection() {
             std::string senderIp;
             std::string senderNodeId;
             if (receiveControlMessage(kind, value, senderIp, senderNodeId) && senderNodeId != nodeId) {
+                if (kind == "STATUS" && value == "GAME_OVER") {
+                    std::cout << "[역할] GAME_OVER 수신 -> 최종 결과 화면\n";
+                    showFinalScores();
+                    stop();
+                    return false;
+                }
                 if (kind == "ROLE" && value == "DRAWER") {
                     isDrawerRole = false;
                     drawerIp = senderIp;
@@ -596,6 +666,12 @@ void CatchMindGame::runChallengerStandby() {
                     continue;
                 }
                 if (kind == "STATUS") {
+                    if (value == "GAME_OVER") {
+                        std::cout << "[도전자대기] GAME_OVER 수신 -> 최종 결과 화면\n";
+                        showFinalScores();
+                        stop();
+                        return;
+                    }
                     if (value == "WORD_SELECTING" && display != nullptr) {
                         display->beginFrame();
                         display->clearScreen(ui::BG_DARK);
@@ -688,8 +764,8 @@ void CatchMindGame::runChallengerLiveRound() {
     const int halfW = screenW / 2;
     const int myPanelX = (myPlayerNumber == 1) ? 0 : halfW;
     const int myPanelW = (myPlayerNumber == 1) ? halfW : (screenW - halfW);
-    const int btnW = 92;
-    const int btnH = 34;
+    const int btnW = 130;  // 92 → 130
+    const int btnH = 48;   // 34 → 48
     const int btnX = myPanelX + myPanelW - btnW - 8;
     const int btnY = bottomY + panelH - btnH - 8;
     const int writeX = myPanelX + 8;
@@ -802,14 +878,14 @@ void CatchMindGame::runChallengerLiveRound() {
         unsigned int submitColor = submitLocked ? 0x3a3f44 : (answerInkWritten ? 0x1f5c3b : 0x30483a);
         unsigned int submitEdge = submitLocked ? ui::TEXT_DIM : ui::OK;
         drawPanelCard(display, btnX, btnY, btnW, btnH, submitEdge, submitColor, submitColor);
-        display->drawText(btnX + 12, btnY + 10, "SUBMIT", submitEdge, 1);
+        drawTextCentered(display, btnX + btnW / 2, btnY + 16, "SUBMIT", submitEdge, 1);
     };
 
     auto redrawSubmitOnly = [&]() {
         unsigned int submitColor = submitLocked ? 0x3a3f44 : (answerInkWritten ? 0x1f5c3b : 0x30483a);
         unsigned int submitEdge = submitLocked ? ui::TEXT_DIM : ui::OK;
         drawPanelCard(display, btnX, btnY, btnW, btnH, submitEdge, submitColor, submitColor);
-        display->drawText(btnX + 12, btnY + 10, "SUBMIT", submitEdge, 1);
+        drawTextCentered(display, btnX + btnW / 2, btnY + 16, "SUBMIT", submitEdge, 1);
     };
 
     std::cout << "[도전자P" << myPlayerNumber << "] 그림 수신 시작\n";
@@ -842,19 +918,13 @@ input_phase:
                 challengerLastSec = celapsed;
                 int remainSec = ROUND_TIMEOUT_SEC - celapsed;
                 if (remainSec < 0) remainSec = 0;
-                int mm = remainSec / 60;
-                int ss = remainSec % 60;
-                char timerStr[16];
-                snprintf(timerStr, sizeof(timerStr), "%d:%02d", mm, ss);
-                unsigned int timerColor = (remainSec <= 10) ? ui::NG : ui::OK;
 
-                display->drawRect(4, 28, 142, 32, ui::CARD);
-                display->drawText(10, 32, timerStr, timerColor, 2);
+                // 전체 폭 타이머 바 업데이트 (캐릭터 포함)
                 drawTimerGauge(remainSec, ROUND_TIMEOUT_SEC);
 
-                display->drawRect(4, 62, 142, 16, ui::CARD);
+                display->drawRect(4, 28, 142, 16, ui::CARD);
                 std::string roundStr = "Round " + std::to_string(round + 1) + "/" + std::to_string(MAX_ROUNDS);
-                display->drawText(10, 64, roundStr.c_str(), ui::TEXT_MAIN, 1);
+                display->drawText(10, 30, roundStr.c_str(), ui::TEXT_MAIN, 1);
             }
         }
 
@@ -942,11 +1012,11 @@ input_phase:
                 } else if (kind == "STATUS" && value == "ROUND_END") {
                     std::cout << "[도전자P" << myPlayerNumber << "] 라운드 종료\n";
                     return;
-                } else if (kind == "SCORE_DELTA") {
-                    auto colon = value.find(':');
-                    if (colon != std::string::npos) {
-                        try { gameScores[value.substr(0, colon)] += std::stoi(value.substr(colon + 1)); } catch (...) {}
-                    }
+                } else if (kind == "STATUS" && value == "GAME_OVER") {
+                    std::cout << "[도전자P" << myPlayerNumber << "] GAME_OVER 수신 -> 최종 결과\n";
+                    showFinalScores();
+                    stop();
+                    return;
                 }
             }
         }
@@ -1073,12 +1143,7 @@ input_phase:
                 challengerLastSec = celapsed;
                 int remainSec = ROUND_TIMEOUT_SEC - celapsed;
                 if (remainSec < 0) remainSec = 0;
-                int mm = remainSec / 60, ss = remainSec % 60;
-                char timerStr[16];
-                snprintf(timerStr, sizeof(timerStr), "%d:%02d", mm, ss);
-                unsigned int timerColor = (remainSec <= 10) ? ui::NG : ui::OK;
-                display->drawRect(4, 28, 142, 32, ui::CARD);
-                display->drawText(10, 32, timerStr, timerColor, 2);
+                // 전체 폭 타이머 바 업데이트
                 drawTimerGauge(remainSec, ROUND_TIMEOUT_SEC);
             }
         }
@@ -1098,6 +1163,11 @@ input_phase:
                         return;
                     } else if (value == "ROUND_END") {
                         std::cout << "[도전자P" << myPlayerNumber << "] 라운드 종료\n";
+                        return;
+                    } else if (value == "GAME_OVER") {
+                        std::cout << "[도전자P" << myPlayerNumber << "] GAME_OVER 수신 (입력단계) -> 최종 결과\n";
+                        showFinalScores();
+                        stop();
                         return;
                     } else if ((value == "RETRY_P1" && myPlayerNumber == 1) ||
                                (value == "RETRY_P2" && myPlayerNumber == 2)) {
@@ -1132,11 +1202,6 @@ input_phase:
                             showTransitionScreen("CORRECT!", "P" + std::to_string(winner) + " WINS", 2500);
                         }
                         return;
-                    }
-                } else if (kind == "SCORE_DELTA") {
-                    auto colon = value.find(':');
-                    if (colon != std::string::npos) {
-                        try { gameScores[value.substr(0, colon)] += std::stoi(value.substr(colon + 1)); } catch (...) {}
                     }
                 } else if (kind == "DRAW") {
                     std::stringstream parse(value);
@@ -1215,24 +1280,23 @@ bool CatchMindGame::showConfirmDialog(const std::string &selectedText) {
     }
 
     display->beginFrame();
-    display->clearScreen(ui::BG_DARK);
+    // 확인 다이얼로그 - 청보라 테마 배경
+    drawBg(display, screenW, screenH, 1);
 
     int cx = screenW / 2;
-    int cy = screenH / 2;
 
-    int bw = screenW * 3 / 4;
-    int bh = screenH / 3;
-    int bx = cx - bw / 2;
-    int by = cy - bh / 2;
-    drawPanelCard(display, bx - 4, by - 4, bw + 8, bh + 8, ui::ACCENT_WARM, ui::CARD, ui::BG_MID);
-
-    // 선택된 텍스트 표시
+    // 선택 텍스트 카드 (중앙)
     std::string label = toDisplayLabel(selectedText);
-    drawTextCentered(display, cx, by + 24, label, ui::TEXT_MAIN, 3);
+    int cardW = screenW * 3 / 4;
+    int cardH = 110;
+    int cardX = cx - cardW / 2;
+    int cardY = screenH / 2 - 120;
+    display->drawRect(cardX, cardY, cardW, cardH, ui::BG_DARK);
+    drawPanelCard(display, cardX, cardY, cardW, cardH, ui::ACCENT_WARM, ui::CARD, ui::BG_MID);
+    drawTextCentered(display, cx, cardY + 16, "CONFIRM SELECTION", ui::ACCENT_WARM, 1);
+    drawTextCentered(display, cx, cardY + 44, label, ui::TEXT_MAIN, 3);
 
-    drawTextCentered(display, cx, by + 78, "CONFIRM SELECTION", ui::ACCENT_WARM, 2);
-
-    // 좌측 O / 우측 X 버튼 (터치 오작동 방지 위해 대형화)
+    // 좌측 O / 우측 X 버튼
     int btnMargin = 16;
     int btnGap = 24;
     int btnW = (screenW - (btnMargin * 2) - btnGap) / 2;
@@ -1240,12 +1304,14 @@ bool CatchMindGame::showConfirmDialog(const std::string &selectedText) {
     int leftBtnX = btnMargin;
     int rightBtnX = btnMargin + btnW + btnGap;
     int btnY = screenH - btnH - 18;
+    // 버튼 영역 배경
+    display->drawRect(0, btnY - 12, screenW, btnH + 30, ui::BG_DARK);
 
     drawPanelCard(display, leftBtnX - 2, btnY - 2, btnW + 4, btnH + 4, ui::OK, 0x1c492d, 0x1a3e29);
-    drawTextCentered(display, leftBtnX + (btnW / 2), btnY + 22, "O (1)", ui::OK, 3);
+    drawTextCentered(display, leftBtnX + (btnW / 2), btnY + 22, "O", ui::OK, 3);
 
     drawPanelCard(display, rightBtnX - 2, btnY - 2, btnW + 4, btnH + 4, ui::NG, 0x4f2222, 0x3f1e1e);
-    drawTextCentered(display, rightBtnX + (btnW / 2), btnY + 22, "X (2)", ui::NG, 3);
+    drawTextCentered(display, rightBtnX + (btnW / 2), btnY + 22, "X", ui::NG, 3);
     display->endFrame();
 
     std::cout << "[확인] " << selectedText << " 를 선택했습니다. (1=확인, 2=취소)\n";
@@ -1630,31 +1696,24 @@ void CatchMindGame::runSingleBoardRound() {
 
             int remainSec = ROUND_TIMEOUT_SEC - elapsedSec;
             if (remainSec < 0) remainSec = 0;
-            int mm = remainSec / 60;
-            int ss = remainSec % 60;
-            char timerStr[16];
-            snprintf(timerStr, sizeof(timerStr), "%d:%02d", mm, ss);
-            unsigned int timerColor = (remainSec <= 10) ? ui::NG : ui::OK;
 
-            // 타이머 영역 클리어 후 재렌더
-            display->drawRect(4, 28, 142, 32, ui::CARD);
-            display->drawText(10, 32, timerStr, timerColor, 2);
+            // 전체 폭 타이머 바 업데이트 (캐릭터 포함)
             drawTimerGauge(remainSec, ROUND_TIMEOUT_SEC);
 
-            // 라운드 정보
-            display->drawRect(4, 62, 142, 16, ui::CARD);
+            // 라운드 정보 (info panel)
+            display->drawRect(4, 28, 142, 16, ui::CARD);
             std::string roundStr = "Round " + std::to_string(round + 1) + "/" + std::to_string(MAX_ROUNDS);
-            display->drawText(10, 64, roundStr.c_str(), ui::TEXT_MAIN, 1);
+            display->drawText(10, 30, roundStr.c_str(), ui::TEXT_MAIN, 1);
 
             // 주제어 표시 (출제자 전용)
-            display->drawRect(4, 80, 142, 34, 0x1a1133);
-            display->drawRect(4, 80, 142, 14, ui::STROKE);
-            display->drawText(8, 82, "WORD:", ui::TEXT_DIM, 0);
+            display->drawRect(4, 46, 142, 34, 0x0b2e20);
+            display->drawRect(4, 46, 142, 14, ui::STROKE);
+            display->drawText(8, 48, "WORD:", ui::TEXT_DIM, 0);
             std::string wordLabel = toDisplayLabel(targetWord);
-            display->drawText(8, 96, wordLabel.substr(0, 12).c_str(), ui::ACCENT_WARM, 1);
+            display->drawText(8, 62, wordLabel.substr(0, 12).c_str(), 0xFFE000, 1);
 
             // P1/P2 제출 상태
-            int statusY = 118;
+            int statusY = 84;
             if (answerReceived1) {
                 display->drawRect(4, statusY, 142, 16, ui::OK);
                 display->drawText(8, statusY + 2, "P1: SUBMITTED", 0x071a0e, 0);
@@ -1741,6 +1800,27 @@ void CatchMindGame::runSingleBoardRound() {
                         judgingActive = true;
                         broadcastStatusMessage("JUDGING_ACTIVE");
 
+                        // ── 제출 하이라이트: 해당 패널 테두리 + 상단 배너 ──────
+                        {
+                            int hw = screenW / 2;
+                            int pnlX  = (pn == 1) ? 0   : hw;
+                            int pnlW  = (pn == 1) ? hw  : (screenW - hw);
+                            unsigned int hlColor = (pn == 1) ? ui::P1_ACCENT : ui::P2_ACCENT;
+                            // 패널 전체 테두리를 굵게 (3px)
+                            for (int t = 0; t < 3; ++t) {
+                                display->drawRect(pnlX + t,     bottomY + t, pnlW - t*2, 1,       hlColor);
+                                display->drawRect(pnlX + t,     bottomY + t, 1,          panelH - t*2, hlColor);
+                                display->drawRect(pnlX + t,     bottomY + panelH - 1 - t, pnlW - t*2, 1, hlColor);
+                                display->drawRect(pnlX + pnlW - 1 - t, bottomY + t, 1,  panelH - t*2, hlColor);
+                            }
+                            // 패널 상단에 "SUBMITTED!" 배너
+                            int bannerH = 22;
+                            display->drawRect(pnlX + 4, bottomY + 4, pnlW - 8, bannerH, hlColor);
+                            std::string banner = "P" + std::to_string(pn) + " SUBMITTED!";
+                            int bLen = (int)banner.size() * 6 * 2;
+                            display->drawText(pnlX + (pnlW - bLen) / 2, bottomY + 8, banner, 0x000000, 2);
+                        }
+
                         // 화면 전환 없이 현재 3분할 화면에서 판정 버튼 표시
                         drawJudgeButtonsFor(pn, true);
                     }
@@ -1765,11 +1845,14 @@ void CatchMindGame::runSingleBoardRound() {
                     isDrawing = false;
                     roundEnded = true;
                     break;
-                } else if (kind == "SCORE_DELTA") {
-                    auto colon = value.find(':');
-                    if (colon != std::string::npos) {
-                        try { gameScores[value.substr(0, colon)] += std::stoi(value.substr(colon + 1)); } catch (...) {}
-                    }
+                } else if (kind == "STATUS" && value == "GAME_OVER") {
+                    // 다른 보드가 먼저 게임 종료 브로드캐스트 → 바로 최종 결과로
+                    std::cout << "[출제자] GAME_OVER 수신 -> 최종 결과 화면\n";
+                    isDrawing = false;
+                    roundEnded = true;
+                    showFinalScores();
+                    stop();
+                    return;
                 }
             }
         }
@@ -2308,21 +2391,27 @@ void CatchMindGame::showTransitionScreen(const std::string &line1, const std::st
     }
 
     display->beginFrame();
-
-    display->clearScreen(ui::BG_DARK);
+    // 트랜지션 스크린 - 뉴트럴 배경
+    drawBg(display, screenW, screenH, 3);
 
     int cx = screenW / 2;
     int cy = screenH / 2;
 
+    bool isCorrect = (line1.find("CORRECT") != std::string::npos || line1.find("READY") != std::string::npos);
+    bool isNeg     = (line1.find("OVER") != std::string::npos || line1.find("TIME") != std::string::npos);
+    unsigned int edge = isCorrect ? ui::OK : (isNeg ? ui::NG : ui::ACCENT_WARM);
+    unsigned int fillOuter = isCorrect ? 0x0d2418 : (isNeg ? 0x200a0a : 0x1a1230);
+
     int bw = screenW * 2 / 3;
-    int bh = screenH / 4;
+    int bh = screenH / 3;
     int bx = cx - bw / 2;
     int by = cy - bh / 2;
-    unsigned int edge = (line1.find("CORRECT") != std::string::npos) ? ui::OK : ui::ACCENT;
-    drawPanelCard(display, bx - 6, by - 6, bw + 12, bh + 12, edge, ui::CARD, ui::BG_MID);
+    // 카드 영역 solid 배경
+    display->drawRect(bx - 8, by - 8, bw + 16, bh + 16, ui::BG_DARK);
+    drawPanelCard(display, bx - 6, by - 6, bw + 12, bh + 12, edge, fillOuter, ui::CARD);
 
-    drawTextCentered(display, cx, by + bh / 4 - 10, line1, ui::TEXT_MAIN, 3);
-    drawTextCentered(display, cx, by + bh * 3 / 4 - 7, line2, ui::TEXT_DIM, 2);
+    drawTextCentered(display, cx, by + bh / 4 - 12, line1, edge, 4);
+    drawTextCentered(display, cx, by + bh * 3 / 4 - 8, line2, ui::TEXT_MAIN, 2);
     display->endFrame();
 
     usleep(durationMs * 1000);
@@ -2389,35 +2478,21 @@ bool CatchMindGame::waitForAllPlayersReadyAtStart() {
         lastDrawnCount = cur;
         display->beginFrame();
 
-        // 배경 이미지 (PPM) - deploy.sh에서 PNG→PPM 변환된 파일
+        // 배경 - 로비/메인 화면은 main_image.ppm 유지
         bool hasBg = display->drawPNG("/mnt/nfs/img/main_image.ppm", 0, 0, screenW, screenH);
         if (!hasBg) {
-            display->clearScreen(ui::BG_DARK);
+            drawBg(display, screenW, screenH, 0);
         }
 
         int cx = screenW / 2;
 
-        // 하단 반투명 패널 (READY 버튼 + 카운터 영역)
-        int panelH2 = 180;
-        int panelY = screenH - panelH2;
-        display->drawRect(0, panelY, screenW, panelH2, 0xcc07060f);  // 반투명 어두운 바
-
-        int btnW = 340;
-        int btnH = 76;
-        int btnX = cx - btnW / 2;
-        int btnY = panelY + 20;
-
-        if (myReady) {
-            drawPanelCard(display, btnX, btnY, btnW, btnH, ui::TEXT_DIM, 0x2b3138, 0x2b3138);
-            drawTextCentered(display, cx, btnY + 27, "READY", ui::TEXT_DIM, 3);
-        } else {
-            drawPanelCard(display, btnX, btnY, btnW, btnH, ui::OK, 0x1c492d, 0x1a3e29);
-            drawTextCentered(display, cx, btnY + 27, "READY", ui::OK, 3);
-        }
-
-        std::string countText = "Ready " + std::to_string((int)readyNodes.size()) + "/" + std::to_string(TOTAL_PLAYERS);
-        drawTextCentered(display, cx, btnY + btnH + 14, countText, ui::ACCENT_WARM, 2);
-        drawTextCentered(display, cx, screenH - 16, "Tap anywhere to READY", ui::TEXT_DIM, 1);
+        // READY X/3 텍스트만 화면 하단에 표시 (버튼 없음)
+        std::string countText = "READY " + std::to_string((int)readyNodes.size()) + "/" + std::to_string(TOTAL_PLAYERS);
+        // 텍스트 배경 그림자 (가독성)
+        int ty = screenH - 52;
+        display->drawRect(cx - 90, ty - 4, 180, 42, 0x99000000);
+        drawTextCentered(display, cx, ty, countText, myReady ? ui::TEXT_DIM : ui::ACCENT_WARM, 2);
+        drawTextCentered(display, cx, ty + 24, myReady ? "WAITING..." : "TAP TO READY", ui::TEXT_DIM, 1);
         display->endFrame();
     };
 
@@ -2783,30 +2858,33 @@ bool CatchMindGame::selectFromTouchMenu(const std::string &title,
     }
 
     display->beginFrame();
-    display->clearScreen(ui::BG_DARK);
-    display->drawRect(0, 0, screenW, 56, ui::BG_MID);
-    display->drawText(24, 18, title + " SELECT", ui::TEXT_MAIN, 3);
-    display->drawText(screenW - 180, 24, "TOUCH TO CHOOSE", ui::TEXT_DIM, 1);
+    // 메뉴 선택 화면 - 보라 그라디언트 배경
+    drawBg(display, screenW, screenH, 0);
+    // 상단 타이틀 바 (solid)
+    display->drawRect(0, 0, screenW, 62, ui::BG_DARK);
+    drawTextCentered(display, screenW / 2, 10, title + " SELECT", ui::ACCENT_WARM, 3);
+    display->drawText(screenW - 190, 42, "TOUCH TO CHOOSE", ui::TEXT_DIM, 1);
+    // 하단 OX 버튼 영역
+    display->drawRect(0, screenH - 116, screenW, 116, ui::BG_DARK);
+    display->drawText(screenW / 2 - 80, screenH - 100, "CONFIRM HERE", ui::TEXT_DIM, 1);
 
-    const int menuTop = 90;
-    const int menuBottom = screenH - 30;
-    const int itemGap = 12;
+    const int menuTop = 72;
+    // 하단 OX 확인버튼 영역(btnH=78+margin=18+padding=10)을 비워두어 연속터치 방지
+    const int menuBottom = screenH - 120;
+    const int itemGap = 10;
     int itemH = (menuBottom - menuTop - ((int)options.size() - 1) * itemGap) / (int)options.size();
-    itemH = std::max(40, itemH);
+    itemH = std::max(44, itemH);
 
     for (size_t i = 0; i < options.size(); ++i) {
         int y = menuTop + (int)i * (itemH + itemGap);
-        drawPanelCard(display,
-                      28,
-                      y,
-                      screenW - 56,
-                      itemH,
-                      ui::STROKE,
-                      ui::CARD,
-                      highlightColor);
+        // 반투명 카드 배경
+        display->drawRect(24, y, screenW - 48, itemH, 0xcc0d0922);
+        drawPanelCard(display, 24, y, screenW - 48, itemH,
+                      i == 0 ? ui::ACCENT_WARM : ui::STROKE,
+                      0x00000000, 0x00000000);
 
-        std::string line = std::to_string((int)i + 1) + ". " + toDisplayLabel(options[i]);
-        display->drawText(48, y + std::max(8, (itemH / 2) - 10), line, ui::TEXT_MAIN, 2);
+        std::string line = std::to_string((int)i + 1) + ".  " + toDisplayLabel(options[i]);
+        display->drawText(52, y + std::max(10, (itemH / 2) - 10), line, ui::TEXT_MAIN, 2);
 
         std::cout << "  " << (i + 1) << ") " << options[i] << " [" << toDisplayLabel(options[i]) << "]\n";
     }
@@ -3307,38 +3385,259 @@ void CatchMindGame::showDrawerJudgeScreen() {
 // ---------------------------------------------------------------------------
 
 void CatchMindGame::broadcastScoreDelta(const std::string &targetNodeId, int delta) {
+    // 자기 점수만 로컬로 누적 - 게임 종료 시 FINAL_SCORE로 한 번에 공유
     gameScores[targetNodeId] += delta;
-    if (roleSock < 0) return;
-    std::string payload = "CM|" + nodeId + "|SCORE_DELTA|" + targetNodeId + ":" + std::to_string(delta);
-    sockaddr_in to{};
-    to.sin_family = AF_INET;
-    to.sin_port = htons(37031);
-    to.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-    for (int i = 0; i < 3; ++i)
-        sendto(roleSock, payload.c_str(), payload.size(), 0,
-               reinterpret_cast<sockaddr *>(&to), sizeof(to));
     std::cout << "[점수] " << targetNodeId << " delta=" << delta
               << " total=" << gameScores[targetNodeId] << "\n";
 }
 
 void CatchMindGame::drawTimerGauge(int remainSec, int totalSec) {
     if (display == nullptr) return;
-    const int gx = 4, gy = 54, gw = 138, gh = 5;
-    display->drawRect(gx, gy, gw, gh, ui::CARD_ALT);
-    int fillW = (remainSec * gw) / std::max(1, totalSec);
-    fillW = std::max(0, std::min(gw, fillW));
-    if (fillW > 0) {
-        unsigned int color;
-        if (remainSec > 30)      color = 0xFFD93D;  // 노랑
-        else if (remainSec > 10) color = 0xFF8C1A;  // 주황
-        else                     color = 0xFF3030;  // 빨강
-        display->drawRect(gx, gy, fillW, gh, color);
-    }
+    const int barH = TIMER_BAR_H;
+    const int barY = topH;
+    const int barW = screenW;
+
+    // ── 1. 바 전체 배경 재그리기 ─────────────────────────────────
+    display->drawRect(0, barY, barW, barH, 0x0a1810);
+    display->drawRect(0, barY,             barW, 1, ui::STROKE);
+    display->drawRect(0, barY + barH - 1,  barW, 1, ui::STROKE);
+
+    // ── 2. 경과 시간 채우기 (왼→오른쪽으로 증가, 캐릭터가 오른쪽으로 이동) ─
+    int elapsed  = totalSec - remainSec;
+    if (elapsed < 0) elapsed = 0;
+    int fillW = totalSec > 0 ? (elapsed * barW) / totalSec : 0;
+    fillW = std::max(0, std::min(barW, fillW));
+
+    unsigned int fillColor;
+    if      (remainSec > 30) fillColor = 0x00cc55;   // 초록
+    else if (remainSec > 10) fillColor = 0xff9900;   // 주황
+    else                     fillColor = 0xff3030;   // 빨강
+
+    if (fillW > 0)
+        display->drawRect(0, barY + 1, fillW, barH - 2, fillColor);
+
+    // 남은 시간 텍스트 (바 오른쪽 빈 영역)
+    char buf[12];
+    int mm = remainSec / 60, ss = remainSec % 60;
+    snprintf(buf, sizeof(buf), "%d:%02d", mm, ss);
+    int tLen = (int)strlen(buf) * 6;
+    display->drawText(barW - tLen - 8, barY + (barH - 8) / 2, buf, 0xf0fff8, 1);
+
+    // ── 3. 캐릭터 이미지 (경과 시간에 따라 왼→오른쪽으로 이동) ─────────
+    // 바 높이보다 약간 커서 바 위로 삐죽 나오도록 렌더
+    const int cSize = barH + 10;        // 캐릭터 정사각형 크기 (바보다 약간 큼)
+    int charCX = fillW;
+    if (charCX < cSize / 2 + 2) charCX = cSize / 2 + 2;
+    if (charCX > barW - cSize / 2 - 2) charCX = barW - cSize / 2 - 2;
+
+    int charX = charCX - cSize / 2;
+    int charY = barY - (cSize - barH) / 2;  // 바 중앙에 세로 정렬 (위로 약간 돌출)
+
+    display->drawPNG("/mnt/nfs/img/character.ppm", charX, charY, cSize, cSize, true);
 }
 
 void CatchMindGame::showFinalScores() {
     if (display == nullptr) return;
 
+    // ── 1단계: 집계 노드(PLAYER1)로 점수 제출 -> 집계 스냅샷 재배포 ──
+    // 최종 점수 권한을 1곳으로 모아서 동기화 순서 꼬임을 줄인다.
+    const int SCORE_WAIT_MS = 10000;
+    const std::string scoreCollectorNodeId = "PLAYER1";
+    const std::vector<std::string> expectedPlayers = {"PLAYER1", "PLAYER2", "PLAYER3"};
+
+    if (roleSock >= 0) {
+        int myScore = gameScores.count(nodeId) ? gameScores[nodeId] : 0;
+        gameScores[nodeId] = myScore;
+
+        const bool isCollector = (nodeId == scoreCollectorNodeId);
+        std::set<std::string> submittedPlayers;
+        submittedPlayers.insert(nodeId);
+        bool snapshotReady = false;
+
+        auto parseScorePair = [&](const std::string &token, std::string &pid, int &score) -> bool {
+            auto colon = token.find(':');
+            if (colon == std::string::npos) return false;
+            pid = token.substr(0, colon);
+            try {
+                score = std::stoi(token.substr(colon + 1));
+            } catch (...) {
+                return false;
+            }
+            return !pid.empty();
+        };
+
+        auto applySnapshot = [&](const std::string &snapshot) -> int {
+            int applied = 0;
+            std::stringstream ss(snapshot);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                std::string pid;
+                int score = 0;
+                if (!parseScorePair(token, pid, score)) continue;
+                gameScores[pid] = score;
+                applied++;
+            }
+            return applied;
+        };
+
+        auto buildSnapshot = [&]() -> std::string {
+            std::string out;
+            for (size_t i = 0; i < expectedPlayers.size(); ++i) {
+                const std::string &pid = expectedPlayers[i];
+                int score = gameScores.count(pid) ? gameScores[pid] : 0;
+                if (!out.empty()) out += ",";
+                out += pid + ":" + std::to_string(score);
+            }
+            return out;
+        };
+
+        sockaddr_in to{};
+        to.sin_family = AF_INET;
+        to.sin_port   = htons(37031);
+        to.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+        std::string submitValue = nodeId + ":" + std::to_string(myScore);
+        std::string submitPayload = "CM|" + nodeId + "|FINAL_SCORE_SUBMIT|" + submitValue;
+
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(SCORE_WAIT_MS);
+
+        // 수집/집계 중 로딩 화면 표시
+        display->beginFrame();
+        drawBg(display, screenW, screenH, 2);
+        int cx = screenW / 2;
+        if (isCollector) {
+            drawTextCentered(display, cx, screenH / 2 - 30, "COLLECTING SCORES", ui::ACCENT_WARM, 2);
+            drawTextCentered(display, cx, screenH / 2 + 10, "Collector: P1", ui::TEXT_DIM, 1);
+        } else {
+            drawTextCentered(display, cx, screenH / 2 - 30, "SUBMITTING SCORE", ui::ACCENT_WARM, 2);
+            drawTextCentered(display, cx, screenH / 2 + 10, "Waiting for final snapshot", ui::TEXT_DIM, 1);
+        }
+        display->endFrame();
+
+        auto lastRetry = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() < deadline && !snapshotReady) {
+            auto now = std::chrono::steady_clock::now();
+
+            // 비집계 노드는 자신의 점수를 주기적으로 제출
+            if (!isCollector &&
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRetry).count() >= 400) {
+                lastRetry = now;
+                sendto(roleSock, submitPayload.c_str(), submitPayload.size(), 0,
+                       reinterpret_cast<sockaddr *>(&to), sizeof(to));
+            }
+
+            // 집계 노드는 3명 점수가 모이면 스냅샷을 전원에게 재배포
+            if (isCollector && (int)submittedPlayers.size() >= (int)expectedPlayers.size()) {
+                std::string snapshot = buildSnapshot();
+                std::string syncPayload = "CM|" + nodeId + "|FINAL_SCORE_SYNC|" + snapshot;
+                for (int i = 0; i < 5; ++i) {
+                    sendto(roleSock, syncPayload.c_str(), syncPayload.size(), 0,
+                           reinterpret_cast<sockaddr *>(&to), sizeof(to));
+                    usleep(20000);
+                }
+                applySnapshot(snapshot);
+                snapshotReady = true;
+                break;
+            }
+
+            fd_set fds; FD_ZERO(&fds); FD_SET(roleSock, &fds);
+            timeval tv{}; tv.tv_sec = 0; tv.tv_usec = 50000;
+            if (select(roleSock + 1, &fds, nullptr, nullptr, &tv) <= 0) continue;
+
+            std::string kind, value, sip, snid;
+            while (receiveControlMessage(kind, value, sip, snid)) {
+                if (snid == nodeId) continue;
+
+                if (kind == "FINAL_SCORE_SYNC") {
+                    int applied = applySnapshot(value);
+                    if (applied > 0) {
+                        snapshotReady = true;
+                    }
+                } else if (kind == "FINAL_SCORE_SUBMIT" || kind == "FINAL_SCORE") {
+                    // FINAL_SCORE는 이전 버전 호환 수신 경로
+                    if (isCollector) {
+                        std::string pid;
+                        int score = 0;
+                        if (parseScorePair(value, pid, score)) {
+                            gameScores[pid] = score;
+                            submittedPlayers.insert(pid);
+
+                            display->beginFrame();
+                            drawBg(display, screenW, screenH, 2);
+                            drawTextCentered(display, cx, screenH / 2 - 30, "COLLECTING SCORES", ui::ACCENT_WARM, 2);
+                            std::string prog = std::to_string((int)submittedPlayers.size()) + "/" +
+                                               std::to_string((int)expectedPlayers.size()) + " received";
+                            drawTextCentered(display, cx, screenH / 2 + 10, prog, ui::TEXT_DIM, 1);
+                            display->endFrame();
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!snapshotReady && isCollector) {
+            // 집계 노드 타임아웃: 현재까지 모은 값으로 강제 스냅샷 배포
+            std::string snapshot = buildSnapshot();
+            std::string syncPayload = "CM|" + nodeId + "|FINAL_SCORE_SYNC|" + snapshot;
+            for (int i = 0; i < 5; ++i) {
+                sendto(roleSock, syncPayload.c_str(), syncPayload.size(), 0,
+                       reinterpret_cast<sockaddr *>(&to), sizeof(to));
+                usleep(20000);
+            }
+            applySnapshot(snapshot);
+            snapshotReady = true;
+            std::cout << "[최종점수] 집계 타임아웃 -> 부분 수집 스냅샷 배포\n";
+        } else if (!snapshotReady) {
+            std::cout << "[최종점수] 스냅샷 미수신 타임아웃 -> 로컬 점수로 진행\n";
+        }
+
+        // ── 2단계: ALL_READY 배리어 (3명 동시 결과화면 진입) ────────────
+        // 내가 ALL_READY 전송, 상대 2명의 ALL_READY 수신 대기 (최대 5초)
+        const int OTHERS = 2;
+        std::string readyPayload = "CM|" + nodeId + "|FINAL_READY|1";
+        for (int i = 0; i < 3; ++i) {
+            sendto(roleSock, readyPayload.c_str(), readyPayload.size(), 0,
+                   reinterpret_cast<sockaddr *>(&to), sizeof(to));
+            usleep(20000);
+        }
+
+        std::set<std::string> readyFrom;
+        auto barrierDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5000);
+        auto lastRR = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() < barrierDeadline &&
+               (int)readyFrom.size() < OTHERS) {
+            // 재전송
+            auto now2 = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(now2 - lastRR).count() >= 800) {
+                lastRR = now2;
+                sendto(roleSock, readyPayload.c_str(), readyPayload.size(), 0,
+                       reinterpret_cast<sockaddr *>(&to), sizeof(to));
+            }
+            fd_set fds2; FD_ZERO(&fds2); FD_SET(roleSock, &fds2);
+            timeval tv2{}; tv2.tv_sec = 0; tv2.tv_usec = 30000;
+            if (select(roleSock + 1, &fds2, nullptr, nullptr, &tv2) <= 0) continue;
+            std::string kind, value, sip, snid;
+            while (receiveControlMessage(kind, value, sip, snid)) {
+                if (snid == nodeId) continue;
+                // 배리어 구간에서도 스냅샷/구버전 점수 패킷이 오면 반영
+                if (kind == "FINAL_SCORE_SYNC") {
+                    applySnapshot(value);
+                } else if (kind == "FINAL_SCORE") {
+                    std::string pid;
+                    int score = 0;
+                    if (parseScorePair(value, pid, score)) {
+                        gameScores[pid] = score;
+                    }
+                }
+                if (kind == "FINAL_READY") {
+                    readyFrom.insert(snid);
+                    std::cout << "[배리어] " << snid << " FINAL_READY (" << readyFrom.size() << "/" << OTHERS << ")\n";
+                }
+            }
+        }
+        std::cout << "[배리어] 완료 -> 동시 결과화면 진입\n";
+    }
+
+    // ── 결과 화면 렌더링 ──────────────────────────────────────────────
     // 점수 내림차순 정렬
     std::vector<std::pair<int, std::string>> sorted;
     for (auto &kv : gameScores)
@@ -3348,55 +3647,58 @@ void CatchMindGame::showFinalScores() {
     });
 
     display->beginFrame();
-    display->clearScreen(ui::BG_DARK);
+    // 게임 오버 화면 - 다크레드 데마 배경
+    drawBg(display, screenW, screenH, 2);
 
     int cx = screenW / 2;
-    drawPanelCard(display, cx - 200, 20, 400, 56, ui::NG, 0x3a0f0f, 0x2a0b0b);
-    drawTextCentered(display, cx, 34, "GAME OVER", ui::NG, 4);
-    drawTextCentered(display, cx, 62, "FINAL SCORES", ui::TEXT_DIM, 1);
 
-    const char  *rankLabel[] = {"1ST", "2ND", "3RD"};
+    // 타이틀 영역
+    display->drawRect(cx - 240, 10, 480, 72, ui::BG_DARK);
+    drawPanelCard(display, cx - 236, 10, 472, 72, ui::NG, 0x2a0b0b, 0x1a0808);
+    drawTextCentered(display, cx, 18, "GAME OVER", ui::NG, 4);
+    drawTextCentered(display, cx, 60, "FINAL SCORES", ui::TEXT_DIM, 1);
+
+    const char  *rankEmoji[] = {"#1", "#2", "#3"};
     const unsigned int rankColor[] = {0xFFD700, 0xC0C0C0, 0xCD7F32};
 
-    int startY = 96;
+    int startY = 90;
+    int rowH = (screenH - startY - 60) / 3;
+    rowH = std::max(56, std::min(rowH, 72));
+
     for (int i = 0; i < (int)sorted.size() && i < 3; ++i) {
-        int y = startY + i * 62;
+        int y = startY + i * (rowH + 8);
         unsigned int rc = rankColor[i];
-        drawPanelCard(display, cx - 210, y, 420, 56, rc, ui::CARD, ui::BG_MID);
-        display->drawText(cx - 200, y + 18, rankLabel[i], rc, 2);
+
+        // 카드 영역 솔리드 배경
+        display->drawRect(cx - 240, y, 480, rowH, ui::BG_MID);
+        drawPanelCard(display, cx - 240, y, 480, rowH, rc, ui::CARD, ui::BG_MID);
+
+        // 순위 라벨
+        display->drawText(cx - 228, y + rowH / 2 - 12, rankEmoji[i], rc, 2);
 
         int playerNum = 0;
         const std::string &id = sorted[i].second;
         if (id.rfind("PLAYER", 0) == 0) {
-            try {
-                playerNum = std::stoi(id.substr(6));
-            } catch (...) {
-                playerNum = 0;
-            }
+            try { playerNum = std::stoi(id.substr(6)); } catch (...) {}
         }
 
-        std::string label;
+        std::string plabel;
         if (playerNum >= 1 && playerNum <= 3) {
-            label = "Player " + std::to_string(playerNum);
+            plabel = "P" + std::to_string(playerNum);
         } else {
-            label = id;
+            plabel = id.substr(0, 8);
         }
-        if (id == nodeId) {
-            label += " (YOU)";
-        }
-        if (label.size() > 18) label = label.substr(label.size() - 18);
-        display->drawText(cx - 140, y + 18, label.c_str(), ui::TEXT_MAIN, 2);
+        if (id == nodeId) plabel += " (YOU)";
+
+        drawTextCentered(display, cx - 30, y + rowH / 2 - 12, plabel,
+                         (id == nodeId) ? ui::ACCENT_WARM : ui::TEXT_MAIN, 2);
+
         std::string scoreStr = std::to_string(sorted[i].first) + " pts";
-        drawTextCentered(display, cx + 150, y + 18, scoreStr.c_str(), rc, 2);
+        drawTextCentered(display, cx + 160, y + rowH / 2 - 12, scoreStr, rc, 2);
     }
 
-    // 내 점수 강조 표시
-    auto it = gameScores.find(nodeId);
-    if (it != gameScores.end()) {
-        std::string myStr = "YOUR SCORE: " + std::to_string(it->second) + " pts";
-        drawTextCentered(display, cx, startY + 3 * 62 + 20, myStr.c_str(), ui::ACCENT, 2);
-    }
-    drawTextCentered(display, cx, screenH - 30, "TAP or press any key to exit", ui::TEXT_DIM, 1);
+    display->drawRect(cx - 200, screenH - 32, 400, 24, ui::BG_DARK);
+    drawTextCentered(display, cx, screenH - 28, "TAP or press any key to exit", ui::TEXT_DIM, 1);
     display->endFrame();
 
     // 터치 버퍼 비우기
@@ -3406,9 +3708,8 @@ void CatchMindGame::showFinalScores() {
         touchPressed = false;
     }
 
-    // 최대 30초 대기 (터치 or 키)
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (std::chrono::steady_clock::now() < deadline) {
+    // 터치 or 키 입력 있을 때까지 무한 대기
+    while (true) {
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(STDIN_FILENO, &fds);
