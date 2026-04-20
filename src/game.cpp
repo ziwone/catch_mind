@@ -227,6 +227,10 @@ void CatchMindGame::drawStatus() {
 }
 
 void CatchMindGame::start() {
+    // TTY 커서 숨기기 (framebuffer 위에 커서 깜빡임 방지)
+    printf("\033[?25l");
+    fflush(stdout);
+
     bgm.setVolume(80);
     bgm.play("/mnt/nfs/bgm/maple1.wav");
 
@@ -237,6 +241,12 @@ void CatchMindGame::start() {
     std::cout << "=====================================\n";
 
     initRoleSocket();
+
+    // 게임 시작 전: 전원 READY 합의
+    if (!waitForAllPlayersReadyAtStart()) {
+        stop();
+        return;
+    }
 
     while (round < MAX_ROUNDS) {
         if (!roleSelection()) {
@@ -261,6 +271,10 @@ void CatchMindGame::start() {
 }
 
 void CatchMindGame::stop() {
+    // TTY 커서 복원
+    printf("\033[?25h");
+    fflush(stdout);
+
     std::cout << "[시스템] 게임 종료\n";
     if (display != nullptr) {
         display->beginFrame();
@@ -1218,18 +1232,20 @@ bool CatchMindGame::showConfirmDialog(const std::string &selectedText) {
 
     drawTextCentered(display, cx, by + 78, "CONFIRM SELECTION", ui::ACCENT_WARM, 2);
 
-    // 좌측: YES 버튼 (좌클릭 또는 1)
-    int btnW = (screenW - 40) / 2;
-    int btnH = 50;
-    int leftBtnX = 20;
-    int rightBtnX = 20 + btnW + 20;
-    int btnY = screenH - 100;
+    // 좌측 O / 우측 X 버튼 (터치 오작동 방지 위해 대형화)
+    int btnMargin = 16;
+    int btnGap = 24;
+    int btnW = (screenW - (btnMargin * 2) - btnGap) / 2;
+    int btnH = 78;
+    int leftBtnX = btnMargin;
+    int rightBtnX = btnMargin + btnW + btnGap;
+    int btnY = screenH - btnH - 18;
 
     drawPanelCard(display, leftBtnX - 2, btnY - 2, btnW + 4, btnH + 4, ui::OK, 0x1c492d, 0x1a3e29);
-    display->drawText(leftBtnX + 20, btnY + 15, "YES(1)", ui::OK, 2);
+    drawTextCentered(display, leftBtnX + (btnW / 2), btnY + 22, "O (1)", ui::OK, 3);
 
     drawPanelCard(display, rightBtnX - 2, btnY - 2, btnW + 4, btnH + 4, ui::NG, 0x4f2222, 0x3f1e1e);
-    display->drawText(rightBtnX + 15, btnY + 15, "NO(2)", ui::NG, 2);
+    drawTextCentered(display, rightBtnX + (btnW / 2), btnY + 22, "X (2)", ui::NG, 3);
     display->endFrame();
 
     std::cout << "[확인] " << selectedText << " 를 선택했습니다. (1=확인, 2=취소)\n";
@@ -1988,24 +2004,24 @@ void CatchMindGame::processTouchEvents(bool *released, int *releaseX, int *relea
             } else if (ev.code == ABS_Y || ev.code == ABS_MT_POSITION_Y) {
                 touchRawY = ev.value;
                 touchHasY = true;
+            } else if (ev.code == ABS_MT_TRACKING_ID) {
+                bool wasPressed = touchPressed;
+                touchPressed = (ev.value >= 0);
+                if (!touchPressed) {
+                    strokeActive = false;
+                    if (released != nullptr && wasPressed && touchHasX && touchHasY) {
+                        int sx = 0, sy = 0;
+                        if (mapTouchToScreen(touchRawX, touchRawY, sx, sy)) {
+                            *released = true;
+                            if (releaseX != nullptr) *releaseX = sx;
+                            if (releaseY != nullptr) *releaseY = sy;
+                        }
+                    }
+                }
             }
         } else if (ev.type == EV_KEY && ev.code == BTN_TOUCH) {
             bool wasPressed = touchPressed;
             touchPressed = (ev.value != 0);
-            if (!touchPressed) {
-                strokeActive = false;
-                if (released != nullptr && wasPressed && touchHasX && touchHasY) {
-                    int sx = 0, sy = 0;
-                    if (mapTouchToScreen(touchRawX, touchRawY, sx, sy)) {
-                        *released = true;
-                        if (releaseX != nullptr) *releaseX = sx;
-                        if (releaseY != nullptr) *releaseY = sy;
-                    }
-                }
-            }
-        } else if (ev.type == EV_ABS && ev.code == ABS_MT_TRACKING_ID) {
-            bool wasPressed = touchPressed;
-            touchPressed = (ev.value >= 0);
             if (!touchPressed) {
                 strokeActive = false;
                 if (released != nullptr && wasPressed && touchHasX && touchHasY) {
@@ -2348,6 +2364,196 @@ bool CatchMindGame::waitForGameReady(int timeoutMs) {
     return false;
 }
 
+bool CatchMindGame::waitForAllPlayersReadyAtStart() {
+    if (display == nullptr || roleSock < 0) {
+        return false;
+    }
+
+    // 고정 구성: 총 3명 (PLAYER1/2/3)
+    static constexpr int TOTAL_PLAYERS = 3;
+
+    bool myReady = false;
+    std::vector<std::string> readyNodes;
+    int lastDrawnCount = -1;  // 실제로 숫자가 바뀔 때만 화면 갱신
+    auto markReady = [&](const std::string &nid) -> bool {
+        if (std::find(readyNodes.begin(), readyNodes.end(), nid) == readyNodes.end()) {
+            readyNodes.push_back(nid);
+            return true;  // 새로 추가됨
+        }
+        return false;  // 이미 있음
+    };
+
+    auto drawStartReadyIfChanged = [&]() {
+        int cur = (int)readyNodes.size();
+        if (cur == lastDrawnCount) return;  // 숫자 변화 없으면 스킵
+        lastDrawnCount = cur;
+        display->beginFrame();
+        display->clearScreen(ui::BG_DARK);
+
+        int cx = screenW / 2;
+        int cy = screenH / 2;
+        int bw = screenW * 3 / 4;
+        int bh = screenH / 2;
+        int bx = cx - bw / 2;
+        int by = cy - bh / 2;
+
+        drawPanelCard(display, bx - 6, by - 6, bw + 12, bh + 12, ui::ACCENT, ui::CARD, ui::BG_MID);
+        drawTextCentered(display, cx, by + 22, "CATCH MIND", ui::TEXT_MAIN, 4);
+        drawTextCentered(display, cx, by + 60, "ALL PLAYERS MUST BE READY", ui::TEXT_DIM, 1);
+
+        int btnW = 300;
+        int btnH = 76;
+        int btnX = cx - btnW / 2;
+        int btnY = by + bh - 120;
+
+        if (myReady) {
+            drawPanelCard(display, btnX, btnY, btnW, btnH, ui::TEXT_DIM, 0x2b3138, 0x2b3138);
+            drawTextCentered(display, cx, btnY + 27, "READY", ui::TEXT_DIM, 3);
+        } else {
+            drawPanelCard(display, btnX, btnY, btnW, btnH, ui::OK, 0x1c492d, 0x1a3e29);
+            drawTextCentered(display, cx, btnY + 27, "READY", ui::OK, 3);
+        }
+
+        std::string countText = "Ready " + std::to_string((int)readyNodes.size()) + "/" + std::to_string(TOTAL_PLAYERS);
+        drawTextCentered(display, cx, btnY + btnH + 18, countText, ui::ACCENT_WARM, 2);
+        drawTextCentered(display, cx, screenH - 28, "Tap READY or press r", ui::TEXT_DIM, 1);
+        display->endFrame();
+    };
+
+    auto drawStartReady = [&]() { drawStartReadyIfChanged(); };
+
+    // 화면 진입 시 터치 버퍼 비우기
+    if (touchFd >= 0) {
+        input_event tmp{};
+        while (read(touchFd, &tmp, sizeof(tmp)) == (ssize_t)sizeof(tmp)) {}
+        touchPressed = false;
+        touchHasX = false;
+        touchHasY = false;
+    }
+
+    // 네트워크 버퍼 비우기: 500ms 대기 후 flush
+    // (이전 게임에서 늦게 도착하는 LOBBY_READY 패킷 제거)
+    usleep(500000);
+    if (roleSock >= 0) {
+        char buffer[256];
+        sockaddr_in from{};
+        socklen_t fromLen = sizeof(from);
+        while (recvfrom(roleSock, buffer, sizeof(buffer), MSG_DONTWAIT,
+                       reinterpret_cast<sockaddr *>(&from), &fromLen) > 0) {
+        }
+    }
+    // 진입 시각 기록 - 이 시각 이전에 생성된 LOBBY_READY는 모두 무시됨
+    auto lobbyEntryTime = std::chrono::steady_clock::now();
+
+    auto sendReady = [&]() {
+        myReady = true;
+        markReady(nodeId);
+        broadcastStatusMessage("LOBBY_READY");
+        std::cout << "[로비] 내가 READY (" << readyNodes.size() << "/" << TOTAL_PLAYERS << ")\n";
+        lastDrawnCount = -1;  // 강제 화면 갱신
+    };
+
+    drawStartReady();
+    auto lastBroadcast = std::chrono::steady_clock::now();
+
+    while (true) {
+        if ((int)readyNodes.size() >= TOTAL_PLAYERS) {
+            showTransitionScreen("ALL READY", "STARTING...", 900);
+            return true;
+        }
+
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(STDIN_FILENO, &readfds);
+        int maxfd = STDIN_FILENO;
+        if (roleSock >= 0) {
+            FD_SET(roleSock, &readfds);
+            if (roleSock > maxfd) maxfd = roleSock;
+        }
+        if (touchFd >= 0) {
+            FD_SET(touchFd, &readfds);
+            if (touchFd > maxfd) maxfd = touchFd;
+        }
+
+        timeval tv{};
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000;
+
+        int ready = select(maxfd + 1, &readfds, nullptr, nullptr, &tv);
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+
+        if (myReady) {
+            auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastBroadcast).count() >= 1000) {
+                broadcastStatusMessage("LOBBY_READY");
+                lastBroadcast = now;
+            }
+        }
+
+        if (roleSock >= 0 && FD_ISSET(roleSock, &readfds)) {
+            std::string kind, value, senderIp, senderNodeId;
+            while (receiveControlMessage(kind, value, senderIp, senderNodeId)) {
+                if (senderNodeId == nodeId) continue;
+                if (kind == "STATUS" && value == "LOBBY_READY") {
+                    // 로비 진입 이전에 생성된 잔류 패킷 무시 (1초 여유)
+                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - lobbyEntryTime).count();
+                    if (elapsed < 200) continue;
+                    bool isNew = markReady(senderNodeId);
+                    if (isNew) {
+                        std::cout << "[로비] " << senderNodeId << " READY ("
+                                  << readyNodes.size() << "/" << TOTAL_PLAYERS << ")\n";
+                        drawStartReady();
+                    }
+                }
+            }
+        }
+
+        if (touchFd >= 0 && FD_ISSET(touchFd, &readfds)) {
+            input_event ev{};
+            while (read(touchFd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+                // 로비 화면에서는 화면 아무 곳이나 터치하면 READY
+                // (버튼이 하나뿐이므로 좌표 판정 불필요)
+                auto handleRelease = [&]() {
+                    if (!myReady) {
+                        std::cout << "[로비] 터치 감지 -> READY\n";
+                        sendReady();
+                        drawStartReady();
+                    }
+                };
+                if (ev.type == EV_ABS) {
+                    if (ev.code == ABS_X || ev.code == ABS_MT_POSITION_X) {
+                        touchRawX = ev.value; touchHasX = true;
+                    } else if (ev.code == ABS_Y || ev.code == ABS_MT_POSITION_Y) {
+                        touchRawY = ev.value; touchHasY = true;
+                    } else if (ev.code == ABS_MT_TRACKING_ID) {
+                        bool wasPressed = touchPressed;
+                        touchPressed = (ev.value >= 0);
+                        if (wasPressed && !touchPressed) handleRelease();
+                    }
+                } else if (ev.type == EV_KEY && ev.code == BTN_TOUCH) {
+                    bool wasPressed = touchPressed;
+                    touchPressed = (ev.value != 0);
+                    if (wasPressed && !touchPressed) handleRelease();
+                }
+            }
+        }
+
+        if (FD_ISSET(STDIN_FILENO, &readfds)) {
+            std::string line;
+            if (!std::getline(std::cin, line)) return false;
+            if (line == "q") return false;
+            if (!myReady && (line == "r" || line == "R" || line == "ready")) {
+                sendReady();
+                drawStartReady();
+            }
+        }
+    }
+}
+
 void CatchMindGame::broadcastDrawerSelected() {
     if (roleSock < 0) {
         return;
@@ -2532,16 +2738,16 @@ bool CatchMindGame::waitTouchReleasePoint(int &sx, int &sy, int timeoutMs) {
             } else if (ev.code == ABS_Y || ev.code == ABS_MT_POSITION_Y) {
                 touchRawY = ev.value;
                 touchHasY = true;
+            } else if (ev.code == ABS_MT_TRACKING_ID) {
+                bool wasPressed = touchPressed;
+                touchPressed = (ev.value >= 0);
+                if (wasPressed && !touchPressed && touchHasX && touchHasY) {
+                    return mapTouchToScreen(touchRawX, touchRawY, sx, sy);
+                }
             }
         } else if (ev.type == EV_KEY && ev.code == BTN_TOUCH) {
             bool wasPressed = touchPressed;
             touchPressed = (ev.value != 0);
-            if (wasPressed && !touchPressed && touchHasX && touchHasY) {
-                return mapTouchToScreen(touchRawX, touchRawY, sx, sy);
-            }
-        } else if (ev.type == EV_ABS && ev.code == ABS_MT_TRACKING_ID) {
-            bool wasPressed = touchPressed;
-            touchPressed = (ev.value >= 0);
             if (wasPressed && !touchPressed && touchHasX && touchHasY) {
                 return mapTouchToScreen(touchRawX, touchRawY, sx, sy);
             }

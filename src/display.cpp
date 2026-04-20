@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <string.h>
 #include <fstream>
+#include <linux/kd.h>    // KD_GRAPHICS, KD_TEXT
 
 static int wait_for_vsync(int fd) {
     int arg = 0;
@@ -192,11 +193,40 @@ bool Display::init() {
     }
     
     isInitialized = true;
+
+    // 실제 콘솔 VT에서 커서 숨기기
+    // /dev/tty0 = 현재 활성 VT (SSH로 실행해도 실제 화면에 적용됨)
+    const char *consoleCandidates[] = {"/dev/tty0", "/dev/tty1", "/dev/tty", nullptr};
+    for (int i = 0; consoleCandidates[i] != nullptr; ++i) {
+        int ttyFd = open(consoleCandidates[i], O_RDWR | O_NOCTTY);
+        if (ttyFd >= 0) {
+            // KD_GRAPHICS: TTY 텍스트/커서 렌더링 완전 차단
+            ioctl(ttyFd, KDSETMODE, KD_GRAPHICS);
+            // escape sequence로도 한번 더 숨기기
+            const char *hide = "\033[?25l";
+            write(ttyFd, hide, 7);
+            ::close(ttyFd);
+            break;
+        }
+    }
+
     return true;
 }
 
 void Display::close_fb() {
     if (isInitialized) {
+        // 실제 콘솔 VT 복원
+        const char *consoleCandidates[] = {"/dev/tty0", "/dev/tty1", "/dev/tty", nullptr};
+        for (int i = 0; consoleCandidates[i] != nullptr; ++i) {
+            int ttyFd = open(consoleCandidates[i], O_RDWR | O_NOCTTY);
+            if (ttyFd >= 0) {
+                ioctl(ttyFd, KDSETMODE, KD_TEXT);
+                const char *show = "\033[?25h";
+                write(ttyFd, show, 7);
+                ::close(ttyFd);
+                break;
+            }
+        }
         if (shadowBuffer != nullptr) {
             free(shadowBuffer);
             shadowBuffer = nullptr;
