@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 set -euo pipefail
 
 # 공유폴더 → 작업폴더 동기화 후 빌드

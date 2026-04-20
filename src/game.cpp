@@ -297,8 +297,7 @@ void CatchMindGame::start() {
     printf("\033[?25l");
     fflush(stdout);
 
-    bgm.setVolume(80);
-    bgm.play("/mnt/nfs/bgm/maple1.wav");
+
 
     std::cout << "=====================================\n";
     std::cout << "캐치마인드 멀티보드 프로토타입\n";
@@ -320,6 +319,9 @@ void CatchMindGame::start() {
     gameScores["PLAYER2"] = 0;
     gameScores["PLAYER3"] = 0;
     round = 0;
+
+    bgm.setVolume(80);
+    bgm.play("/mnt/nfs/bgm/maple1.wav");
 
     while (round < MAX_ROUNDS) {
         if (!roleSelection()) {
@@ -695,6 +697,17 @@ void CatchMindGame::runChallengerStandby() {
                         drawTextCentered(display, cx, cy - 26, "WORD SELECTING", ui::TEXT_MAIN, 3);
                         drawTextCentered(display, cx, cy + 20, "PLEASE WAIT", ui::TEXT_DIM, 2);
                         display->endFrame();
+                    } else if (value == "GAME_READY" && !drawerIp.empty()) {
+                        // DRAWING_START를 놓쳤으나 GAME_READY는 수신한 경우 즉시 진입
+                        std::cout << "[도전자] GAME_READY 수신 (DRAWING_START 미수신) -> 즉시 게임 진입\n";
+                        if (myLocalIp.empty()) myLocalIp = getLocalIpAddress();
+                        int myBN = getPlayerNumberFromIp(myLocalIp);
+                        int drBN = getPlayerNumberFromIp(drawerIp);
+                        int slot = getChallengerSlotByDrawer(myBN, drBN);
+                        if (slot != 0) myPlayerNumber = slot;
+                        if (myPlayerNumber == 0) myPlayerNumber = 1;
+                        runChallengerLiveRound();
+                        return;
                     } else if (value == "DRAWING_START") {
                         std::cout << "[도전자] DRAWING_START 수신! 출제자=" << senderIp << "\n";
                         drawerIp = senderIp;
@@ -713,6 +726,8 @@ void CatchMindGame::runChallengerStandby() {
 
                         // 출제자와 동일한 전환 화면 표시
                         showTransitionScreen("GAME START", "GET READY!", 1500);
+                        // 출제자 GAME_READY 신호 대기 (싱크 맞춤, 최대 4초)
+                        waitForGameReady(4000);
                         std::cout << "[도전자] 게임 화면 진입 시작\n";
                         runChallengerLiveRound();
                         std::cout << "[도전자] runChallengerLiveRound 종료\n";
@@ -1086,6 +1101,12 @@ input_phase:
                             }
                         }
                     } catch (...) {}
+                } else if (kind == "STATUS" && (value == "A_CLEAR_P1" || value == "A_CLEAR_P2")) {
+                    int pn = (value == "A_CLEAR_P1") ? 1 : 2;
+                    display->beginFrame();
+                    clearAnswerAreaForSlot(pn);
+                    display->endFrame();
+                    if (pn != myPlayerNumber) otherStrokeActive = false;
                 } else if (kind == "A_UP") {
                     otherStrokeActive = false;
                 } else if (kind == "ANSWER") {
@@ -1492,6 +1513,12 @@ input_phase:
                             }
                         }
                     } catch (...) {}
+                } else if (kind == "STATUS" && (value == "A_CLEAR_P1" || value == "A_CLEAR_P2")) {
+                    int pn = (value == "A_CLEAR_P1") ? 1 : 2;
+                    display->beginFrame();
+                    clearAnswerAreaForSlot(pn);
+                    display->endFrame();
+                    if (pn != myPlayerNumber) otherStrokeActive = false;
                 } else if (kind == "A_UP") {
                     otherStrokeActive = false;
                 } else if (kind == "ANSWER") {
@@ -1662,14 +1689,16 @@ bool CatchMindGame::selectCategoryAndWord() {
 
     std::cout << "[출제자] 선택한 주제어: " << targetWord << "\n";
 
-    // ① 먼저 도전자들에게 신호 전송 (도전자가 신호를 받은 뒤 화면 전환)
-    broadcastStatusMessage("DRAWING_START");
+    // ① DRAWING_START를 600ms 동안 4회 반복 전송 (네트워크 신뢰성 확보)
+    broadcastStatusMessage("DRAWING_START");  // 150ms
+    broadcastStatusMessage("DRAWING_START");  // 150ms
+    broadcastStatusMessage("DRAWING_START");  // 150ms
+    broadcastStatusMessage("DRAWING_START");  // 150ms = 총 600ms
 
-    // ② 도전자들이 신호를 수신하고 처리할 여유(500ms)를 준 뒤 출제자 전환 화면 표시
-    usleep(500000);
+    // ② 출제자 전환 화면 (도전자들은 이 사이에 전환 화면 표시 중)
     showTransitionScreen("GAME START", "GET READY!", 1500);
 
-    // ③ 도전자들이 자신의 전환 화면을 다 보고 게임 루프 진입할 시간을 준 뒤 GAME_READY 전송
+    // ③ 전환 완료 후 GAME_READY 전송 (도전자가 이 신호를 받은 뒤 게임 루프 진입)
     broadcastStatusMessage("GAME_READY");
     return true;
 }
@@ -1928,6 +1957,7 @@ void CatchMindGame::runSingleBoardRound() {
             paintAnswerPanel(1, 0x102336);
             drawJudgeButtonsFor(1, false);
             display->endFrame();
+            broadcastStatusMessage("A_CLEAR_P1");  // 모든 보드에 P1 패널 즉시 지우기
             broadcastStatusMessage("RETRY_P1");
         } else {
             receivedAnswer2.clear();
@@ -1937,6 +1967,7 @@ void CatchMindGame::runSingleBoardRound() {
             paintAnswerPanel(2, 0x2a1b21);
             drawJudgeButtonsFor(2, false);
             display->endFrame();
+            broadcastStatusMessage("A_CLEAR_P2");  // 모든 보드에 P2 패널 즉시 지우기
             broadcastStatusMessage("RETRY_P2");
         }
         judgingActive = false;
@@ -2163,6 +2194,11 @@ void CatchMindGame::runSingleBoardRound() {
                         }
                         display->endFrame();
                     } catch (...) {}
+                } else if (kind == "STATUS" && (value == "A_CLEAR_P1" || value == "A_CLEAR_P2")) {
+                    display->beginFrame();
+                    if (value == "A_CLEAR_P1") { answerStrokeActive1 = false; paintAnswerPanel(1, 0x102336); }
+                    else                        { answerStrokeActive2 = false; paintAnswerPanel(2, 0x2a1b21); }
+                    display->endFrame();
                 } else if (kind == "A_UP") {
                     try {
                         int pn = std::stoi(value);
@@ -2840,7 +2876,7 @@ bool CatchMindGame::waitForGameReady(int timeoutMs) {
             std::string value;
             std::string senderIp;
             std::string senderNodeId;
-            if (receiveControlMessage(kind, value, senderIp, senderNodeId)) {
+            while (receiveControlMessage(kind, value, senderIp, senderNodeId)) {
                 if (senderNodeId != nodeId && kind == "STATUS" && value == "GAME_READY") {
                     std::cout << "[동기화] GAME_READY 수신 -> 게임 화면 진입\n";
                     return true;

@@ -265,7 +265,7 @@ void fb_server_run(int port) {
     printf("[fb_server] FB: %dx%d, %dbpp  http://<보드IP>:%d/\n", w, h, bpp, port);
 
     int ssock = socket(AF_INET, SOCK_STREAM, 0);
-    if (ssock < 0) { perror("socket"); return 1; }
+    if (ssock < 0) { perror("socket"); return; }
 
     int opt = 1;
     setsockopt(ssock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -276,10 +276,10 @@ void fb_server_run(int port) {
     addr.sin_port        = htons((uint16_t)port);
 
     if (bind(ssock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("bind"); close(ssock); return 1;
+        perror("bind"); close(ssock); return;
     }
     if (listen(ssock, 8) < 0) {
-        perror("listen"); close(ssock); return 1;
+        perror("listen"); close(ssock); return;
     }
 
     for (;;) {
