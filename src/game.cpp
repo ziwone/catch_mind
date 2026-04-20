@@ -243,10 +243,8 @@ void CatchMindGame::drawGameLayout() {
     display->drawRect(canvasX, canvasY, canvasW, canvasH, Display::COLOR_BLACK);
 
     if (isDrawerRole) {
-        display->drawRect(canvasX + 8, canvasY + 8, 96, 24, ui::ACCENT_WARM);
         display->drawText(canvasX + 14, canvasY + 14, "DRAWER", 0xFFE000, 1);
     } else {
-        display->drawRect(canvasX + 8, canvasY + 8, 122, 24, ui::ACCENT);
         display->drawText(canvasX + 14, canvasY + 14, "CHALLENGER", 0xFFE000, 1);
     }
 
@@ -265,8 +263,6 @@ void CatchMindGame::drawGameLayout() {
 
     // 전체 폭 타이머 바 배경 (캔버스 하단 ~ 하단 패널 사이)
     display->drawRect(0, topH, screenW, TIMER_BAR_H, 0x0a1810);
-    display->drawRect(0, topH, screenW, 1, ui::STROKE);
-    display->drawRect(0, topH + TIMER_BAR_H - 1, screenW, 1, ui::STROKE);
     display->drawRect(halfW - 1, bottomY, 2, panelH, ui::STROKE);
 
     display->drawText(10, bottomY + 8, "P1", ui::TEXT_MAIN, 2);
@@ -494,8 +490,6 @@ bool CatchMindGame::roleSelection() {
                             broadcastDrawerSelected();
                             // ② 그 다음에 전환 화면
                             showTransitionScreen("DRAWER SELECTED", "CHOOSE CATEGORY", 1500);
-                            // ③ 터치 잔상 제거를 위한 추가 대기
-                            usleep(300000);
                             std::cout << "[역할] 출제자 선택 완료\n";
                             return true;
                         }
@@ -536,7 +530,6 @@ bool CatchMindGame::roleSelection() {
                             }
                             std::string pLabel = (myPlayerNumber == 1) ? "CHALLENGER P1" : "CHALLENGER P2";
                             showTransitionScreen(pLabel.c_str(), "PLEASE WAIT...", 1000);
-                            usleep(300000);
                             std::cout << "[역할] 도전자P" << myPlayerNumber << " 선택 완료\n";
                             return true;
                         }
@@ -752,6 +745,15 @@ void CatchMindGame::runChallengerLiveRound() {
                   << " => P" << myPlayerNumber << "\n";
     }
 
+    // 이전 화면에서 남은 터치 이벤트 버퍼 비우기
+    if (touchFd >= 0) {
+        input_event tmp{};
+        while (read(touchFd, &tmp, sizeof(tmp)) == (ssize_t)sizeof(tmp)) {}
+        touchPressed = false;
+        touchHasX = false;
+        touchHasY = false;
+    }
+
     // 도전자 화면 레이아웃 (출제자와 동일: 좌상단 정보 패널 + 우상단 캔버스)
     isDrawing = false;
     drawGameLayout();
@@ -768,6 +770,10 @@ void CatchMindGame::runChallengerLiveRound() {
     const int btnH = 48;   // 34 → 48
     const int btnX = myPanelX + myPanelW - btnW - 8;
     const int btnY = bottomY + panelH - btnH - 8;
+    const int clearW = 98;
+    const int clearH = 40;
+    const int clearX = btnX - clearW - 10;
+    const int clearY = btnY + (btnH - clearH) / 2;
     const int writeX = myPanelX + 8;
     const int writeY = bottomY + 24;
     const int writeW = myPanelW - 16;
@@ -778,6 +784,10 @@ void CatchMindGame::runChallengerLiveRound() {
     bool answerStrokeActive = false;
     int answerLastX = 0;
     int answerLastY = 0;
+    bool haveRecentAnswerEnd = false;
+    int recentAnswerEndX = 0;
+    int recentAnswerEndY = 0;
+    auto recentAnswerEndTime = std::chrono::steady_clock::now();
     std::vector<std::pair<int, int>> queuedInkPoints;
 
     auto sendAnswerControl = [&](const std::string &kind, const std::string &value) {
@@ -804,6 +814,10 @@ void CatchMindGame::runChallengerLiveRound() {
         queuedInkPoints.push_back({-1, -1});
     };
 
+    auto lastTapTime = std::chrono::steady_clock::now() - std::chrono::milliseconds(300);
+    int lastTapX = -10000;
+    int lastTapY = -10000;
+
     auto flushQueuedInk = [&]() {
         for (const auto &pt : queuedInkPoints) {
             if (pt.first < 0 || pt.second < 0) {
@@ -813,6 +827,18 @@ void CatchMindGame::runChallengerLiveRound() {
             }
         }
         queuedInkPoints.clear();
+    };
+
+    auto saveRecentAnswerEnd = [&](int sx, int sy) {
+        recentAnswerEndX = sx;
+        recentAnswerEndY = sy;
+        recentAnswerEndTime = std::chrono::steady_clock::now();
+        haveRecentAnswerEnd = true;
+    };
+
+    auto recentAnswerAgeMs = [&]() -> long long {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - recentAnswerEndTime).count();
     };
 
     // 상대 도전자 패널에 잉크 스트로크를 렌더링하기 위한 상태
@@ -848,6 +874,20 @@ void CatchMindGame::runChallengerLiveRound() {
         otherLastY = sy;
     };
 
+    auto clearAnswerAreaForSlot = [&](int slot) {
+        int hw = screenW / 2;
+        int panelX = (slot == 1) ? 0 : hw;
+        int panelW = (slot == 1) ? hw : (screenW - hw);
+        int areaX = panelX + 8;
+        int areaY = bottomY + 24;
+        int areaW = std::max(10, panelW - 16);
+        int areaH = std::max(10, panelH - 24 - 40);
+        drawPanelCard(display, areaX, areaY, areaW, areaH, ui::STROKE, ui::CARD, 0x0b151f);
+        if (slot == myPlayerNumber) {
+            display->drawText(areaX + 6, areaY + 6, "TOUCH WRITE", ui::TEXT_DIM, 1);
+        }
+    };
+
     auto redrawPanels = [&]() {
         paintAnswerPanel(1, 0x102336);
         paintAnswerPanel(2, 0x2a1b21);
@@ -875,6 +915,9 @@ void CatchMindGame::runChallengerLiveRound() {
         drawPanelCard(display, writeX, writeY, writeW, writeH, ui::STROKE, ui::CARD, 0x0b151f);
         display->drawText(writeX + 6, writeY + 6, "TOUCH WRITE", ui::TEXT_DIM, 1);
 
+        drawPanelCard(display, clearX, clearY, clearW, clearH, ui::ACCENT_WARM, 0x533611, 0x3c280f);
+        drawTextCentered(display, clearX + clearW / 2, clearY + 13, "CLEAR", ui::ACCENT_WARM, 1);
+
         unsigned int submitColor = submitLocked ? 0x3a3f44 : (answerInkWritten ? 0x1f5c3b : 0x30483a);
         unsigned int submitEdge = submitLocked ? ui::TEXT_DIM : ui::OK;
         drawPanelCard(display, btnX, btnY, btnW, btnH, submitEdge, submitColor, submitColor);
@@ -886,6 +929,27 @@ void CatchMindGame::runChallengerLiveRound() {
         unsigned int submitEdge = submitLocked ? ui::TEXT_DIM : ui::OK;
         drawPanelCard(display, btnX, btnY, btnW, btnH, submitEdge, submitColor, submitColor);
         drawTextCentered(display, btnX + btnW / 2, btnY + 16, "SUBMIT", submitEdge, 1);
+    };
+
+    // 자신의 패널 전체를 잉크 없이 재그리기 (beginFrame/endFrame 안에서 호출)
+    auto redrawMyPanelClean = [&]() {
+        unsigned int ownBg = (myPlayerNumber == 1) ? 0x102336u : 0x2a1b21u;
+        paintAnswerPanel(myPlayerNumber, ownBg);
+
+        int myPx = (myPlayerNumber == 1) ? 0 : halfW;
+        int myPw = (myPlayerNumber == 1) ? halfW : (screenW - halfW);
+        display->drawRect(myPx, bottomY, myPw, panelH, ui::ACCENT_WARM);
+        int lbX = myPx + 8;
+        display->drawText(lbX,      bottomY + 26, "ME:",        ui::TEXT_MAIN,    1);
+        display->drawText(lbX + 32, bottomY + 26, "WRITE HERE", ui::ACCENT_WARM,  1);
+
+        drawPanelCard(display, writeX, writeY, writeW, writeH, ui::STROKE, ui::CARD, 0x0b151f);
+        display->drawText(writeX + 6, writeY + 6, "TOUCH WRITE", ui::TEXT_DIM, 1);
+
+        drawPanelCard(display, clearX, clearY, clearW, clearH, ui::ACCENT_WARM, 0x533611, 0x3c280f);
+        drawTextCentered(display, clearX + clearW / 2, clearY + 13, "CLEAR", ui::ACCENT_WARM, 1);
+
+        redrawSubmitOnly();
     };
 
     std::cout << "[도전자P" << myPlayerNumber << "] 그림 수신 시작\n";
@@ -952,7 +1016,9 @@ input_phase:
                             unsigned int color = (unsigned int)std::stoul(colorStr, nullptr, 16);
                             if (sx >= canvasX && sx < canvasX + canvasW &&
                                 sy >= canvasY && sy < canvasY + canvasH) {
-                                display->drawRect(sx - 2, sy - 2, 5, 5, color);
+                                int dotSize = (color == Display::COLOR_BLACK) ? 13 : 5;
+                                int half = dotSize / 2;
+                                display->drawRect(sx - half, sy - half, dotSize, dotSize, color);
                             }
                         } catch (...) {}
                     }
@@ -974,6 +1040,18 @@ input_phase:
                             }
                         } catch (...) {}
                     }
+                } else if (kind == "A_CLEAR") {
+                    try {
+                        int pn = std::stoi(value);
+                        if (pn == 1 || pn == 2) {
+                            display->beginFrame();
+                            clearAnswerAreaForSlot(pn);
+                            display->endFrame();
+                            if (pn != myPlayerNumber) {
+                                otherStrokeActive = false;
+                            }
+                        }
+                    } catch (...) {}
                 } else if (kind == "A_UP") {
                     otherStrokeActive = false;
                 } else if (kind == "ANSWER") {
@@ -1004,11 +1082,15 @@ input_phase:
                     return;
                 } else if (kind == "STATUS" && value == "JUDGING_ACTIVE") {
                     // 다른 참여자의 제출을 출제자가 판정 중이면 즉시 submit 잠금
-                    submitLocked = true;
-                    redrawSubmitOnly();
+                    if (!submitLocked) {
+                        submitLocked = true;
+                        redrawSubmitOnly();
+                    }
                 } else if (kind == "STATUS" && value == "JUDGING_END") {
-                    submitLocked = false;
-                    redrawSubmitOnly();
+                    if (submitLocked) {
+                        submitLocked = false;
+                        redrawSubmitOnly();
+                    }
                 } else if (kind == "STATUS" && value == "ROUND_END") {
                     std::cout << "[도전자P" << myPlayerNumber << "] 라운드 종료\n";
                     return;
@@ -1039,7 +1121,27 @@ input_phase:
                         if (!mapTouchToScreen(touchRawX, touchRawY, sx, sy)) continue;
 
                         if (sx >= writeX && sx < writeX + writeW && sy >= writeY && sy < writeY + writeH) {
+                            if (haveRecentAnswerEnd && recentAnswerAgeMs() > 140) {
+                                haveRecentAnswerEnd = false;
+                            }
+
                             if (!answerStrokeActive) {
+                                if (haveRecentAnswerEnd) {
+                                    int gdx = sx - recentAnswerEndX;
+                                    int gdy = sy - recentAnswerEndY;
+                                    int gap = std::max(std::abs(gdx), std::abs(gdy));
+                                    if (recentAnswerAgeMs() <= 120 && gap <= 48) {
+                                        int bsteps = std::max(1, gap);
+                                        for (int i = 1; i <= bsteps; ++i) {
+                                            int px = recentAnswerEndX + (gdx * i) / bsteps;
+                                            int py = recentAnswerEndY + (gdy * i) / bsteps;
+                                            display->drawRect(px - 2, py - 2, 5, 5, Display::COLOR_WHITE);
+                                            sendAnswerPoint(px, py);
+                                        }
+                                    }
+                                    haveRecentAnswerEnd = false;
+                                }
+
                                 display->drawRect(sx - 2, sy - 2, 5, 5, Display::COLOR_WHITE);
                                 answerLastX = sx;
                                 answerLastY = sy;
@@ -1048,7 +1150,7 @@ input_phase:
                             } else {
                                 int dx = sx - answerLastX;
                                 int dy = sy - answerLastY;
-                                int steps = std::max(std::abs(dx), std::abs(dy)) / 2;
+                                int steps = std::max(std::abs(dx), std::abs(dy));
                                 if (steps < 1) steps = 1;
                                 for (int i = 1; i <= steps; ++i) {
                                     int px = answerLastX + (dx * i) / steps;
@@ -1069,11 +1171,38 @@ input_phase:
                     bool wasPressed = touchPressed;
                     touchPressed = (ev.value != 0);
                     if (!touchPressed) {
+                        if (answerStrokeActive) {
+                            saveRecentAnswerEnd(answerLastX, answerLastY);
+                        }
                         answerStrokeActive = false;
-                        sendAnswerUp();
+                        if (wasPressed) {
+                            sendAnswerUp();
+                        }
                         if (wasPressed && touchHasX && touchHasY) {
                             int sx = 0, sy = 0;
                             if (mapTouchToScreen(touchRawX, touchRawY, sx, sy)) {
+                                auto nowTap = std::chrono::steady_clock::now();
+                                long long tapGapMs = std::chrono::duration_cast<std::chrono::milliseconds>(nowTap - lastTapTime).count();
+                                int tapDx = std::abs(sx - lastTapX);
+                                int tapDy = std::abs(sy - lastTapY);
+                                if (tapGapMs < 120 && tapDx <= 6 && tapDy <= 6) {
+                                    continue;
+                                }
+                                lastTapTime = nowTap;
+                                lastTapX = sx;
+                                lastTapY = sy;
+                                saveRecentAnswerEnd(sx, sy);
+                                if (sx >= clearX && sx < clearX + clearW && sy >= clearY && sy < clearY + clearH) {
+                                    answerInkWritten = false;
+                                    answerStrokeActive = false;
+                                    haveRecentAnswerEnd = false;
+                                    queuedInkPoints.clear();
+                                    display->beginFrame();
+                                    redrawMyPanelClean();
+                                    display->endFrame();
+                                    sendAnswerControl("A_CLEAR", std::to_string(myPlayerNumber));
+                                    continue;
+                                }
                                 if (sx >= btnX && sx < btnX + btnW && sy >= btnY && sy < btnY + btnH) {
                                     if (!submitted && !submitLocked && answerInkWritten) {
                                         flushQueuedInk();
@@ -1090,10 +1219,35 @@ input_phase:
                     bool wasPressed = touchPressed;
                     touchPressed = (ev.value >= 0);
                     if (wasPressed && !touchPressed) {
+                        if (answerStrokeActive) {
+                            saveRecentAnswerEnd(answerLastX, answerLastY);
+                        }
                         answerStrokeActive = false;
                         sendAnswerUp();
                         int sx = 0, sy = 0;
                         if (touchHasX && touchHasY && mapTouchToScreen(touchRawX, touchRawY, sx, sy)) {
+                            auto nowTap = std::chrono::steady_clock::now();
+                            long long tapGapMs = std::chrono::duration_cast<std::chrono::milliseconds>(nowTap - lastTapTime).count();
+                            int tapDx = std::abs(sx - lastTapX);
+                            int tapDy = std::abs(sy - lastTapY);
+                            if (tapGapMs < 120 && tapDx <= 6 && tapDy <= 6) {
+                                continue;
+                            }
+                            lastTapTime = nowTap;
+                            lastTapX = sx;
+                            lastTapY = sy;
+                            saveRecentAnswerEnd(sx, sy);
+                            if (sx >= clearX && sx < clearX + clearW && sy >= clearY && sy < clearY + clearH) {
+                                answerInkWritten = false;
+                                answerStrokeActive = false;
+                                haveRecentAnswerEnd = false;
+                                queuedInkPoints.clear();
+                                display->beginFrame();
+                                redrawMyPanelClean();
+                                display->endFrame();
+                                sendAnswerControl("A_CLEAR", std::to_string(myPlayerNumber));
+                                continue;
+                            }
                             if (sx >= btnX && sx < btnX + btnW && sy >= btnY && sy < btnY + btnH) {
                                 if (!submitted && !submitLocked && answerInkWritten) {
                                     flushQueuedInk();
@@ -1144,7 +1298,9 @@ input_phase:
                 int remainSec = ROUND_TIMEOUT_SEC - celapsed;
                 if (remainSec < 0) remainSec = 0;
                 // 전체 폭 타이머 바 업데이트
+                display->beginFrame();
                 drawTimerGauge(remainSec, ROUND_TIMEOUT_SEC);
+                display->endFrame();
             }
         }
 
@@ -1177,14 +1333,20 @@ input_phase:
                         answerInkWritten = false;
                         answerStrokeActive = false;
                         queuedInkPoints.clear();
+                        display->beginFrame();
                         redrawPanels();
+                        display->endFrame();
                         goto input_phase;
                     } else if (value == "JUDGING_ACTIVE") {
-                        submitLocked = true;
-                        redrawSubmitOnly();
+                        if (!submitLocked) {
+                            submitLocked = true;
+                            redrawSubmitOnly();
+                        }
                     } else if (value == "JUDGING_END") {
-                        submitLocked = false;
-                        redrawSubmitOnly();
+                        if (submitLocked) {
+                            submitLocked = false;
+                            redrawSubmitOnly();
+                        }
                     } else if (value.rfind("CORRECT_P", 0) == 0) {
                         int winner = std::stoi(value.substr(9));
                         bool isEarlyAnswer = (value.find("#EARLY") != std::string::npos);
@@ -1217,8 +1379,11 @@ input_phase:
                             int sy = canvasY + (ny * std::max(1, canvasH - 1)) / 999;
                             unsigned int color = (unsigned int)std::stoul(colorStr, nullptr, 16);
                             if (sx >= canvasX && sx < canvasX + canvasW &&
-                                sy >= canvasY && sy < canvasY + canvasH)
-                                display->drawRect(sx - 2, sy - 2, 5, 5, color);
+                                sy >= canvasY && sy < canvasY + canvasH) {
+                                int dotSize = (color == Display::COLOR_BLACK) ? 13 : 5;
+                                int half = dotSize / 2;
+                                display->drawRect(sx - half, sy - half, dotSize, dotSize, color);
+                            }
                         } catch (...) {}
                     }
                 } else if (kind == "A_POINT") {
@@ -1236,6 +1401,18 @@ input_phase:
                             }
                         } catch (...) {}
                     }
+                } else if (kind == "A_CLEAR") {
+                    try {
+                        int pn = std::stoi(value);
+                        if (pn == 1 || pn == 2) {
+                            display->beginFrame();
+                            clearAnswerAreaForSlot(pn);
+                            display->endFrame();
+                            if (pn != myPlayerNumber) {
+                                otherStrokeActive = false;
+                            }
+                        }
+                    } catch (...) {}
                 } else if (kind == "A_UP") {
                     otherStrokeActive = false;
                 } else if (kind == "ANSWER") {
@@ -1421,8 +1598,9 @@ bool CatchMindGame::selectCategoryAndWord() {
 void CatchMindGame::printRoundGuide() {
     std::cout << "\n[출제자 명령어]\n";
     std::cout << "  touch drag    : 그리기\n";
-    std::cout << "  top palette   : 색상 선택 / clear 버튼\n";
+    std::cout << "  top palette   : 색상 선택 / eraser / clear\n";
     std::cout << "  p             : 펜 on/off\n";
+    std::cout << "  e             : 지우개 모드\n";
     std::cout << "  c             : 캔버스 초기화\n";
     std::cout << "  1~7           : 빨주노초파남보\n";
     std::cout << "  0             : 흰색\n";
@@ -1472,6 +1650,16 @@ void CatchMindGame::runSingleBoardRound() {
     answerReceived1 = false;
     answerReceived2 = false;
 
+    // 이전 화면에서 남은 터치 이벤트 버퍼 비우기
+    if (touchFd >= 0) {
+        input_event tmp{};
+        while (read(touchFd, &tmp, sizeof(tmp)) == (ssize_t)sizeof(tmp)) {}
+        touchPressed = false;
+        touchHasX = false;
+        touchHasY = false;
+        strokeActive = false;
+    }
+
     drawGameLayout();
     display->beginFrame();
 
@@ -1493,20 +1681,35 @@ void CatchMindGame::runSingleBoardRound() {
     };
     const int swatchSize = 26;
     const int swatchGap = 8;
+    const int eraseW = 86;
+    const int eraseH = 32;
     const int clearW = 86;
     const int clearH = 32;
     const int toolsY = 2;
     const int paletteW = (8 * swatchSize) + (7 * swatchGap);
-    const int toolsX = std::max(8, screenW - paletteW - clearW - 24);
-    const int clearX = toolsX + paletteW + 8;
+    const int toolsX = std::max(8, screenW - paletteW - eraseW - clearW - 32);
+    const int eraseX = toolsX + paletteW + 8;
+    const int clearX = eraseX + eraseW + 8;
 
     auto drawDrawerTools = [&]() {
-        display->drawRect(toolsX - 6, toolsY - 3, paletteW + clearW + 22, clearH + 7, ui::BG_MID);
+        display->drawRect(toolsX - 6, toolsY - 3, paletteW + eraseW + clearW + 30, clearH + 7, ui::BG_MID);
         for (int i = 0; i < 8; ++i) {
             int x = toolsX + i * (swatchSize + swatchGap);
             unsigned int edge = (brushColor == rainbowColors[i]) ? ui::ACCENT : ui::STROKE;
             drawPanelCard(display, x, toolsY, swatchSize, swatchSize, edge, rainbowColors[i], rainbowColors[i]);
         }
+
+        bool eraserOn = (brushColor == Display::COLOR_BLACK);
+        unsigned int eraserEdge = eraserOn ? ui::ACCENT : ui::STROKE;
+        unsigned int eraserText = eraserOn ? ui::ACCENT : ui::TEXT_DIM;
+        drawPanelCard(display, eraseX, toolsY, eraseW, eraseH, eraserEdge, 0x22282f, 0x1a2027);
+        display->drawText(eraseX + 14, toolsY + 12, "ERASE", eraserText, 1);
+        // 지우개 크기 미리보기(흰색 네모)
+        display->drawRect(eraseX + eraseW - 24, toolsY + 9, 13, 1, Display::COLOR_WHITE);
+        display->drawRect(eraseX + eraseW - 24, toolsY + 21, 13, 1, Display::COLOR_WHITE);
+        display->drawRect(eraseX + eraseW - 24, toolsY + 9, 1, 13, Display::COLOR_WHITE);
+        display->drawRect(eraseX + eraseW - 12, toolsY + 9, 1, 13, Display::COLOR_WHITE);
+
         drawPanelCard(display, clearX, toolsY, clearW, clearH, ui::ACCENT_WARM, 0x533611, 0x3c280f);
         display->drawText(clearX + 18, toolsY + 12, "CLEAR", ui::ACCENT_WARM, 1);
     };
@@ -1637,15 +1840,19 @@ void CatchMindGame::runSingleBoardRound() {
             receivedAnswer1.clear();
             answerReceived1 = false;
             answerStrokeActive1 = false;
+            display->beginFrame();
             paintAnswerPanel(1, 0x102336);
             drawJudgeButtonsFor(1, false);
+            display->endFrame();
             broadcastStatusMessage("RETRY_P1");
         } else {
             receivedAnswer2.clear();
             answerReceived2 = false;
             answerStrokeActive2 = false;
+            display->beginFrame();
             paintAnswerPanel(2, 0x2a1b21);
             drawJudgeButtonsFor(2, false);
+            display->endFrame();
             broadcastStatusMessage("RETRY_P2");
         }
         judgingActive = false;
@@ -1697,6 +1904,7 @@ void CatchMindGame::runSingleBoardRound() {
             int remainSec = ROUND_TIMEOUT_SEC - elapsedSec;
             if (remainSec < 0) remainSec = 0;
 
+            display->beginFrame();
             // 전체 폭 타이머 바 업데이트 (캐릭터 포함)
             drawTimerGauge(remainSec, ROUND_TIMEOUT_SEC);
 
@@ -1729,6 +1937,7 @@ void CatchMindGame::runSingleBoardRound() {
                 display->drawRect(4, statusY, 142, 16, ui::CARD);
                 display->drawText(8, statusY + 2, "P2: waiting", ui::TEXT_DIM, 0);
             }
+            display->endFrame();
         }
 
         if (touchFd >= 0 && FD_ISSET(touchFd, &readfds)) {
@@ -1744,7 +1953,6 @@ void CatchMindGame::runSingleBoardRound() {
                     if (rsx >= x && rsx < x + swatchSize && rsy >= toolsY && rsy < toolsY + swatchSize) {
                         brushColor = rainbowColors[i];
                         drawDrawerTools();
-                        drawBrushDot(cursorX, cursorY);
                         std::cout << "[그리기] 팔레트 색상 선택 index=" << (i + 1) << "\n";
                         toolHandled = true;
                         break;
@@ -1753,6 +1961,14 @@ void CatchMindGame::runSingleBoardRound() {
                 if (toolHandled) {
                     continue;
                 }
+
+                if (rsx >= eraseX && rsx < eraseX + eraseW && rsy >= toolsY && rsy < toolsY + eraseH) {
+                    brushColor = Display::COLOR_BLACK;
+                    drawDrawerTools();
+                    std::cout << "[그리기] 지우개 모드\n";
+                    continue;
+                }
+
                 if (rsx >= clearX && rsx < clearX + clearW && rsy >= toolsY && rsy < toolsY + clearH) {
                     resetCanvas();
                     drawBrushDot(cursorX, cursorY);
@@ -1835,6 +2051,20 @@ void CatchMindGame::runSingleBoardRound() {
                             if (pn == 1 || pn == 2) drawAnswerPointOnPanel(pn, nx, ny);
                         } catch (...) {}
                     }
+                } else if (kind == "A_CLEAR") {
+                    try {
+                        int pn = std::stoi(value);
+                        display->beginFrame();
+                        if (pn == 1) {
+                            answerStrokeActive1 = false;
+                            paintAnswerPanel(1, 0x102336);
+                        }
+                        if (pn == 2) {
+                            answerStrokeActive2 = false;
+                            paintAnswerPanel(2, 0x2a1b21);
+                        }
+                        display->endFrame();
+                    } catch (...) {}
                 } else if (kind == "A_UP") {
                     try {
                         int pn = std::stoi(value);
@@ -1947,6 +2177,11 @@ bool CatchMindGame::handleDrawCommand(const std::string &cmd) {
         std::cout << "[그리기] 캔버스 초기화\n";
         return true;
     }
+    if (cmd == "e") {
+        brushColor = Display::COLOR_BLACK;
+        std::cout << "[그리기] 지우개 모드\n";
+        return true;
+    }
     if (cmd == "1") {
         brushColor = 0xFF3030;
         return true;
@@ -1988,7 +2223,9 @@ void CatchMindGame::drawBrushDot(int x, int y) {
     if (display == nullptr) {
         return;
     }
-    display->drawRect(x - 2, y - 2, 5, 5, brushColor);
+    int dotSize = (brushColor == Display::COLOR_BLACK) ? 13 : 5;
+    int half = dotSize / 2;
+    display->drawRect(x - half, y - half, dotSize, dotSize, brushColor);
 }
 
 void CatchMindGame::resetCanvas() {
@@ -2078,6 +2315,47 @@ void CatchMindGame::processTouchEvents(bool *released, int *releaseX, int *relea
         *released = false;
     }
 
+    // 일부 터치 패널에서 release/repress 이벤트가 짧게 튀면서 선이 끊기므로,
+    // 최근 스트로크 끝점을 잠시 보관했다가 근거리/단시간 재입력 시 자동으로 이어준다.
+    static bool haveRecentStrokeEnd = false;
+    static int recentStrokeEndX = 0;
+    static int recentStrokeEndY = 0;
+    static std::chrono::steady_clock::time_point recentStrokeEndTime = std::chrono::steady_clock::now();
+
+    auto ageRecentEndMs = [&]() -> long long {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - recentStrokeEndTime).count();
+    };
+
+    auto saveRecentEnd = [&](int sx, int sy) {
+        recentStrokeEndX = sx;
+        recentStrokeEndY = sy;
+        recentStrokeEndTime = std::chrono::steady_clock::now();
+        haveRecentStrokeEnd = true;
+    };
+
+    static auto lastReleaseTime = std::chrono::steady_clock::now() - std::chrono::milliseconds(300);
+    static int lastReleaseX = -10000;
+    static int lastReleaseY = -10000;
+
+    auto emitRelease = [&](int sx, int sy) {
+        auto nowRel = std::chrono::steady_clock::now();
+        long long dtMs = std::chrono::duration_cast<std::chrono::milliseconds>(nowRel - lastReleaseTime).count();
+        int dx = std::abs(sx - lastReleaseX);
+        int dy = std::abs(sy - lastReleaseY);
+        if (dtMs < 120 && dx <= 6 && dy <= 6) {
+            return;
+        }
+        lastReleaseTime = nowRel;
+        lastReleaseX = sx;
+        lastReleaseY = sy;
+        if (released != nullptr) {
+            *released = true;
+        }
+        if (releaseX != nullptr) *releaseX = sx;
+        if (releaseY != nullptr) *releaseY = sy;
+    };
+
     input_event ev{};
     while (read(touchFd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
         if (ev.type == EV_ABS) {
@@ -2091,13 +2369,15 @@ void CatchMindGame::processTouchEvents(bool *released, int *releaseX, int *relea
                 bool wasPressed = touchPressed;
                 touchPressed = (ev.value >= 0);
                 if (!touchPressed) {
+                    if (strokeActive) {
+                        saveRecentEnd(strokeLastX, strokeLastY);
+                    }
                     strokeActive = false;
                     if (released != nullptr && wasPressed && touchHasX && touchHasY) {
                         int sx = 0, sy = 0;
                         if (mapTouchToScreen(touchRawX, touchRawY, sx, sy)) {
-                            *released = true;
-                            if (releaseX != nullptr) *releaseX = sx;
-                            if (releaseY != nullptr) *releaseY = sy;
+                            saveRecentEnd(sx, sy);
+                            emitRelease(sx, sy);
                         }
                     }
                 }
@@ -2106,13 +2386,15 @@ void CatchMindGame::processTouchEvents(bool *released, int *releaseX, int *relea
             bool wasPressed = touchPressed;
             touchPressed = (ev.value != 0);
             if (!touchPressed) {
+                if (strokeActive) {
+                    saveRecentEnd(strokeLastX, strokeLastY);
+                }
                 strokeActive = false;
                 if (released != nullptr && wasPressed && touchHasX && touchHasY) {
                     int sx = 0, sy = 0;
                     if (mapTouchToScreen(touchRawX, touchRawY, sx, sy)) {
-                        *released = true;
-                        if (releaseX != nullptr) *releaseX = sx;
-                        if (releaseY != nullptr) *releaseY = sy;
+                        saveRecentEnd(sx, sy);
+                        emitRelease(sx, sy);
                     }
                 }
             }
@@ -2131,7 +2413,29 @@ void CatchMindGame::processTouchEvents(bool *released, int *releaseX, int *relea
                 continue;
             }
 
+            if (haveRecentStrokeEnd && ageRecentEndMs() > 140) {
+                haveRecentStrokeEnd = false;
+            }
+
             if (!strokeActive) {
+                if (haveRecentStrokeEnd) {
+                    int gapDx = sx - recentStrokeEndX;
+                    int gapDy = sy - recentStrokeEndY;
+                    int gap = std::max(std::abs(gapDx), std::abs(gapDy));
+
+                    // 아주 짧은 입력 튐으로 끊긴 선은 자동 연결
+                    if (ageRecentEndMs() <= 120 && gap <= 48) {
+                        int bridgeSteps = std::max(1, gap);
+                        for (int i = 1; i <= bridgeSteps; ++i) {
+                            int px = recentStrokeEndX + (gapDx * i) / bridgeSteps;
+                            int py = recentStrokeEndY + (gapDy * i) / bridgeSteps;
+                            drawBrushDot(px, py);
+                            broadcastDrawPoint(px, py, brushColor);
+                        }
+                    }
+                    haveRecentStrokeEnd = false;
+                }
+
                 cursorX = sx;
                 cursorY = sy;
                 strokeLastX = sx;
@@ -2507,9 +2811,8 @@ bool CatchMindGame::waitForAllPlayersReadyAtStart() {
         touchHasY = false;
     }
 
-    // 네트워크 버퍼 비우기: 500ms 대기 후 flush
+    // 네트워크 버퍼 비우기: 즉시 flush
     // (이전 게임에서 늦게 도착하는 LOBBY_READY 패킷 제거)
-    usleep(500000);
     if (roleSock >= 0) {
         char buffer[256];
         sockaddr_in from{};
@@ -2850,7 +3153,6 @@ bool CatchMindGame::selectFromTouchMenu(const std::string &title,
         touchPressed = false;
         touchHasX = false;
         touchHasY = false;
-        usleep(200000);
     }
 
     if (!statusForOthers.empty()) {
@@ -3399,39 +3701,35 @@ void CatchMindGame::drawTimerGauge(int remainSec, int totalSec) {
 
     // ── 1. 바 전체 배경 재그리기 ─────────────────────────────────
     display->drawRect(0, barY, barW, barH, 0x0a1810);
-    display->drawRect(0, barY,             barW, 1, ui::STROKE);
-    display->drawRect(0, barY + barH - 1,  barW, 1, ui::STROKE);
 
-    // ── 2. 경과 시간 채우기 (왼→오른쪽으로 증가, 캐릭터가 오른쪽으로 이동) ─
-    int elapsed  = totalSec - remainSec;
-    if (elapsed < 0) elapsed = 0;
-    int fillW = totalSec > 0 ? (elapsed * barW) / totalSec : 0;
-    fillW = std::max(0, std::min(barW, fillW));
+    // ── 2. 남은 시간 채우기 (100 -> 0 감소형) ────────────────────
+    int safeRemain = std::max(0, remainSec);
+    int remainW = totalSec > 0 ? (safeRemain * barW) / totalSec : 0;
+    remainW = std::max(0, std::min(barW, remainW));
 
     unsigned int fillColor;
     if      (remainSec > 30) fillColor = 0x00cc55;   // 초록
     else if (remainSec > 10) fillColor = 0xff9900;   // 주황
     else                     fillColor = 0xff3030;   // 빨강
 
-    if (fillW > 0)
-        display->drawRect(0, barY + 1, fillW, barH - 2, fillColor);
+    if (remainW > 0)
+        display->drawRect(0, barY + 1, remainW, barH - 2, fillColor);
 
     // 남은 시간 텍스트 (바 오른쪽 빈 영역)
     char buf[12];
     int mm = remainSec / 60, ss = remainSec % 60;
     snprintf(buf, sizeof(buf), "%d:%02d", mm, ss);
     int tLen = (int)strlen(buf) * 6;
-    display->drawText(barW - tLen - 8, barY + (barH - 8) / 2, buf, 0xf0fff8, 1);
+    display->drawText(barW - tLen - 8, barY + (barH - 8) / 2, buf, ui::TEXT_DIM, 1);
 
-    // ── 3. 캐릭터 이미지 (경과 시간에 따라 왼→오른쪽으로 이동) ─────────
-    // 바 높이보다 약간 커서 바 위로 삐죽 나오도록 렌더
-    const int cSize = barH + 10;        // 캐릭터 정사각형 크기 (바보다 약간 큼)
-    int charCX = fillW;
+    // ── 3. 캐릭터 이미지 (바 내부 렌더로 잔상 방지) ───────────────────
+    const int cSize = std::max(8, barH - 4);
+    int charCX = remainW;
     if (charCX < cSize / 2 + 2) charCX = cSize / 2 + 2;
     if (charCX > barW - cSize / 2 - 2) charCX = barW - cSize / 2 - 2;
 
     int charX = charCX - cSize / 2;
-    int charY = barY - (cSize - barH) / 2;  // 바 중앙에 세로 정렬 (위로 약간 돌출)
+    int charY = barY + (barH - cSize) / 2;
 
     display->drawPNG("/mnt/nfs/img/character.ppm", charX, charY, cSize, cSize, true);
 }
