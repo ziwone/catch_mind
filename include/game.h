@@ -64,6 +64,7 @@ private:
     // 도전자 답 입력 (터치 키패드)
     std::string myAnswerInput;
     int myPlayerNumber = 0;   // 1 또는 2, 도전자 자신의 번호
+    int myBoardNum = 1;       // 보드 플레이어 번호 (1~3, IP로 확정)
 
     // 출제자가 수신한 도전자 답
     std::string receivedAnswer1;
@@ -130,7 +131,8 @@ private:
     int getChallengerSlotByDrawer(int myBoardNum, int drawerBoardNum);
     std::string getLocalIpAddress();
     void broadcastScoreDelta(const std::string &targetNodeId, int delta);
-    void drawTimerGauge(int remainSec, int totalSec);
+    void drawTimerGauge(int remainSec, int totalSec, const std::string &mood = "normal");
+    void showCorrectScreen(int winnerBoardNum, bool iAmWinner, int durationMs);
     void showFinalScores();
 
 public:

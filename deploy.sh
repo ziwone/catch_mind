@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 set -euo pipefail
 
 # 공유폴더 → 작업폴더 동기화 후 빌드
@@ -42,22 +42,23 @@ if [[ -d "${WORK_DIR}/bgm" ]]; then
     sudo rsync -av --delete "${WORK_DIR}/bgm/" /nfsroot/bgm/
 fi
 
-# img 폴더가 있으면 PNG→PPM 변환 후 /nfsroot/img/ 으로 복사
+# img 폴더가 있으면 PNG→PPM 변환 후 /nfsroot/img/ 으로 복사 (서브디렉토리 포함)
 if [[ -d "${WORK_DIR}/img" ]]; then
     echo "  img 폴더 PNG→PPM 변환 후 복사: /nfsroot/img/"
     sudo mkdir -p /nfsroot/img
-    for f in "${WORK_DIR}/img/"*.png; do
+    while IFS= read -r -d '' f; do
         [ -f "$f" ] || continue
-        base=$(basename "${f%.png}")
-        outfile="/nfsroot/img/${base}.ppm"
-        echo "  변환: $(basename $f) -> ${base}.ppm"
+        relpath="${f#${WORK_DIR}/img/}"
+        outfile="/nfsroot/img/${relpath%.png}.ppm"
+        sudo mkdir -p "$(dirname "$outfile")"
+        echo "  변환: ${relpath} -> ${relpath%.png}.ppm"
         sudo python3 "${WORK_DIR}/scripts/png2ppm.py" "$f" "$outfile"
         if [[ -f "$outfile" ]]; then
             echo "  생성됨: $(ls -lh $outfile | awk '{print $5, $9}')"
         else
             echo "  ERROR: $outfile 생성 실패!"
         fi
-    done
+    done < <(find "${WORK_DIR}/img" -name "*.png" -print0)
 fi
 
 echo ""

@@ -1,4 +1,4 @@
-#include "game.h"
+﻿#include "game.h"
 #include <algorithm>
 #include <chrono>
 #include <set>
@@ -164,6 +164,7 @@ CatchMindGame::CatchMindGame() {
     rng.seed(rd());
     myLocalIp = getLocalIpAddress();
     int mappedPlayer = getPlayerNumberFromIp(myLocalIp);
+    myBoardNum = (mappedPlayer >= 1 && mappedPlayer <= 3) ? mappedPlayer : 1;
     if (mappedPlayer >= 1 && mappedPlayer <= 3) {
         nodeId = "PLAYER" + std::to_string(mappedPlayer);
     } else {
@@ -235,6 +236,9 @@ void CatchMindGame::drawGameLayout() {
     // 정보 패널 헤더
     display->drawRect(4, 4, infoPanelW - 8, 20, ui::STROKE);
     display->drawText(8, 8, "INFO", ui::TEXT_DIM, 1);
+    // BRD{N} 라벨
+    std::string brdLabel = "BRD" + std::to_string(myBoardNum);
+    display->drawText(infoPanelW - 32, 8, brdLabel.c_str(), ui::ACCENT, 1);
 
     // 캔버스 테두리
     unsigned int canvasAccent = isDrawerRole ? ui::ACCENT_WARM : ui::ACCENT;
@@ -267,6 +271,16 @@ void CatchMindGame::drawGameLayout() {
 
     display->drawText(10, bottomY + 8, "P1", ui::TEXT_MAIN, 2);
     display->drawText(halfW + 10, bottomY + 8, "P2", ui::TEXT_MAIN, 2);
+
+    // INFO 패널 하단 캐릭터 이미지 (normal)
+    int charSz = std::min(80, topH - 50);
+    if (charSz >= 20) {
+        int cix = (infoPanelW - charSz) / 2;
+        int ciy = topH - charSz - 4;
+        std::string cpath = "/mnt/nfs/img/player" + std::to_string(myBoardNum) + "/normal.ppm";
+        if (!display->drawPNG(cpath, cix, ciy, charSz, charSz))
+            display->drawPNG("/mnt/nfs/img/character.ppm", cix, ciy, charSz, charSz);
+    }
 
     drawStatus();
     display->endFrame();
@@ -762,6 +776,8 @@ void CatchMindGame::runChallengerLiveRound() {
     auto challengerRoundStart = std::chrono::steady_clock::now();
     const int ROUND_TIMEOUT_SEC = 60;
     int challengerLastSec = -1;
+    std::string challengerMood = "normal";
+    auto moodCryUntil = std::chrono::steady_clock::now();
 
     const int halfW = screenW / 2;
     const int myPanelX = (myPlayerNumber == 1) ? 0 : halfW;
@@ -983,12 +999,30 @@ input_phase:
                 int remainSec = ROUND_TIMEOUT_SEC - celapsed;
                 if (remainSec < 0) remainSec = 0;
 
+                // cry 지속시간 만료 시 normal 복귀
+                if (challengerMood == "cry" && cnow >= moodCryUntil) {
+                    challengerMood = "normal";
+                }
+
                 // 전체 폭 타이머 바 업데이트 (캐릭터 포함)
-                drawTimerGauge(remainSec, ROUND_TIMEOUT_SEC);
+                display->beginFrame();
+                drawTimerGauge(remainSec, ROUND_TIMEOUT_SEC, challengerMood);
+
+                // INFO 패널 캐릭터 이미지 갱신
+                int charSzC = std::min(80, topH - 130);
+                if (charSzC >= 20) {
+                    int cix = (150 - charSzC) / 2;
+                    int ciy = topH - charSzC - 4;
+                    display->drawRect(cix, ciy, charSzC, charSzC, ui::CARD);
+                    std::string cpath = "/mnt/nfs/img/player" + std::to_string(myBoardNum) + "/" + challengerMood + ".ppm";
+                    if (!display->drawPNG(cpath, cix, ciy, charSzC, charSzC))
+                        display->drawPNG("/mnt/nfs/img/character.ppm", cix, ciy, charSzC, charSzC);
+                }
 
                 display->drawRect(4, 28, 142, 16, ui::CARD);
                 std::string roundStr = "Round " + std::to_string(round + 1) + "/" + std::to_string(MAX_ROUNDS);
                 display->drawText(10, 30, roundStr.c_str(), ui::TEXT_MAIN, 1);
+                display->endFrame();
             }
         }
 
@@ -1098,6 +1132,28 @@ input_phase:
                     std::cout << "[도전자P" << myPlayerNumber << "] GAME_OVER 수신 -> 최종 결과\n";
                     showFinalScores();
                     stop();
+                    return;
+                } else if (kind == "STATUS" && value.rfind("CORRECT_P", 0) == 0) {
+                    int winner = std::stoi(value.substr(9));
+                    int winnerBoardNum = winner;
+                    auto boardPos = value.find("#BOARD");
+                    if (boardPos != std::string::npos) {
+                        try { winnerBoardNum = std::stoi(value.substr(boardPos + 6)); } catch (...) {}
+                    }
+                    bool isEarlyAnswer = (value.find("#EARLY") != std::string::npos);
+                    if (winner == myPlayerNumber) {
+                        broadcastScoreDelta(nodeId, isEarlyAnswer ? 3 : 2);
+                        bgm.playOnce("/mnt/nfs/bgm/correct.wav");
+                        isDrawerRole = true;
+                        drawerIp.clear();
+                        currentDrawerNodeId = nodeId;
+                        showCorrectScreen(winnerBoardNum, true, 3000);
+                    } else {
+                        bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
+                        isDrawerRole = false;
+                        currentDrawerNodeId = senderNodeId;
+                        showCorrectScreen(winnerBoardNum, false, 3000);
+                    }
                     return;
                 }
             }
@@ -1297,9 +1353,25 @@ input_phase:
                 challengerLastSec = celapsed;
                 int remainSec = ROUND_TIMEOUT_SEC - celapsed;
                 if (remainSec < 0) remainSec = 0;
+                // cry 지속시간 만료 시 normal 복귀
+                if (challengerMood == "cry" && cnow >= moodCryUntil) {
+                    challengerMood = "normal";
+                }
+
                 // 전체 폭 타이머 바 업데이트
                 display->beginFrame();
-                drawTimerGauge(remainSec, ROUND_TIMEOUT_SEC);
+                drawTimerGauge(remainSec, ROUND_TIMEOUT_SEC, challengerMood);
+
+                // INFO 패널 캐릭터 이미지 갱신
+                int charSzW = std::min(80, topH - 130);
+                if (charSzW >= 20) {
+                    int cix = (150 - charSzW) / 2;
+                    int ciy = topH - charSzW - 4;
+                    display->drawRect(cix, ciy, charSzW, charSzW, ui::CARD);
+                    std::string cpath = "/mnt/nfs/img/player" + std::to_string(myBoardNum) + "/" + challengerMood + ".ppm";
+                    if (!display->drawPNG(cpath, cix, ciy, charSzW, charSzW))
+                        display->drawPNG("/mnt/nfs/img/character.ppm", cix, ciy, charSzW, charSzW);
+                }
                 display->endFrame();
             }
         }
@@ -1329,6 +1401,8 @@ input_phase:
                                (value == "RETRY_P2" && myPlayerNumber == 2)) {
                         std::cout << "[도전자P" << myPlayerNumber << "] NG 판정 -> 입력창 초기화 후 재작성\n";
                         bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
+                        challengerMood = "cry";
+                        moodCryUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
                         myAnswerInput.clear();
                         answerInkWritten = false;
                         answerStrokeActive = false;
@@ -1349,19 +1423,24 @@ input_phase:
                         }
                     } else if (value.rfind("CORRECT_P", 0) == 0) {
                         int winner = std::stoi(value.substr(9));
+                        int winnerBoardNum = winner;
+                        auto boardPos = value.find("#BOARD");
+                        if (boardPos != std::string::npos) {
+                            try { winnerBoardNum = std::stoi(value.substr(boardPos + 6)); } catch (...) {}
+                        }
                         bool isEarlyAnswer = (value.find("#EARLY") != std::string::npos);
                         if (winner == myPlayerNumber) {
-                            broadcastScoreDelta(nodeId, isEarlyAnswer ? 3 : 2);  // 도전자 정답 점수
+                            broadcastScoreDelta(nodeId, isEarlyAnswer ? 3 : 2);
                             bgm.playOnce("/mnt/nfs/bgm/correct.wav");
                             isDrawerRole = true;
                             drawerIp.clear();
                             currentDrawerNodeId = nodeId;
-                            showTransitionScreen("CORRECT!", "YOU ARE NEXT DRAWER", 2500);
+                            showCorrectScreen(winnerBoardNum, true, 3000);
                         } else {
                             bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
                             isDrawerRole = false;
                             currentDrawerNodeId = senderNodeId;
-                            showTransitionScreen("CORRECT!", "P" + std::to_string(winner) + " WINS", 2500);
+                            showCorrectScreen(winnerBoardNum, false, 3000);
                         }
                         return;
                     }
@@ -1810,6 +1889,9 @@ void CatchMindGame::runSingleBoardRound() {
     bool judgingActive = false;
     bool roundEnded = false;
 
+    // 슬롯번호(1/2) → 보드번호(1~3) 매핑
+    std::unordered_map<int, int> slotToBoard;
+
     // 타이머 시작 (lambdas보다 먼저 선언해 score 계산에 사용)
     auto roundStartTime = std::chrono::steady_clock::now();
     const int ROUND_TIMEOUT_SEC = 60;
@@ -1817,14 +1899,16 @@ void CatchMindGame::runSingleBoardRound() {
     auto judgeOk = [&](int playerNum) {
         drawJudgeButtonsFor(playerNum, false);
         bgm.playOnce("/mnt/nfs/bgm/correct.wav");
-        // 30초 기준 점수 계산
         int elapsedJudge = (int)std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - roundStartTime).count();
         bool isEarlyAnswer = (elapsedJudge < 30);
-        broadcastScoreDelta(nodeId, isEarlyAnswer ? 2 : 1);   // 출제자 점수
-        std::string correctMsg = (playerNum == 1) ? "CORRECT_P1" : "CORRECT_P2";
+        broadcastScoreDelta(nodeId, isEarlyAnswer ? 2 : 1);
+        int winnerBoardNum = slotToBoard.count(playerNum) ? slotToBoard[playerNum] : playerNum;
+        std::string correctMsg = "CORRECT_P" + std::to_string(playerNum)
+                                + "#BOARD" + std::to_string(winnerBoardNum);
         correctMsg += isEarlyAnswer ? "#EARLY" : "#LATE";
         broadcastStatusMessage(correctMsg);
+        showCorrectScreen(winnerBoardNum, false, 3000);
         isDrawerRole = false;
         drawerIp.clear();
         currentDrawerNodeId.clear();
@@ -1905,8 +1989,20 @@ void CatchMindGame::runSingleBoardRound() {
             if (remainSec < 0) remainSec = 0;
 
             display->beginFrame();
-            // 전체 폭 타이머 바 업데이트 (캐릭터 포함)
-            drawTimerGauge(remainSec, ROUND_TIMEOUT_SEC);
+            // 전체 폭 타이머 바 업데이트 (drawerMood 반영)
+            std::string drawerMood = (remainSec > 30) ? "smile" : (remainSec > 10 ? "normal" : "cry");
+            drawTimerGauge(remainSec, ROUND_TIMEOUT_SEC, drawerMood);
+
+            // INFO 패널 캐릭터 이미지 갱신
+            int charSzD = std::min(80, topH - 130);
+            if (charSzD >= 20) {
+                int cix = (150 - charSzD) / 2;
+                int ciy = topH - charSzD - 4;
+                display->drawRect(cix, ciy, charSzD, charSzD, ui::CARD);
+                std::string cpath = "/mnt/nfs/img/player" + std::to_string(myBoardNum) + "/" + drawerMood + ".ppm";
+                if (!display->drawPNG(cpath, cix, ciy, charSzD, charSzD))
+                    display->drawPNG("/mnt/nfs/img/character.ppm", cix, ciy, charSzD, charSzD);
+            }
 
             // 라운드 정보 (info panel)
             display->drawRect(4, 28, 142, 16, ui::CARD);
@@ -2008,9 +2104,11 @@ void CatchMindGame::runSingleBoardRound() {
                     if (sep != std::string::npos) {
                         int pn = std::stoi(value.substr(0, sep));
                         std::string ans = value.substr(sep + 1);
+                        slotToBoard[pn] = getPlayerNumberFromIp(senderIp);
                         if (pn == 1) { receivedAnswer1 = ans; answerReceived1 = true; }
                         if (pn == 2) { receivedAnswer2 = ans; answerReceived2 = true; }
-                        std::cout << "[출제자] P" << pn << " 답 수신: " << ans << "\n";
+                        std::cout << "[출제자] P" << pn << " 답 수신: " << ans
+                                  << " (IP=" << senderIp << ", 보드=" << slotToBoard[pn] << ")\n";
 
                         // 판정 시작 잠금: 다른 도전자의 submit 잠금
                         judgingActive = true;
@@ -3693,7 +3791,7 @@ void CatchMindGame::broadcastScoreDelta(const std::string &targetNodeId, int del
               << " total=" << gameScores[targetNodeId] << "\n";
 }
 
-void CatchMindGame::drawTimerGauge(int remainSec, int totalSec) {
+void CatchMindGame::drawTimerGauge(int remainSec, int totalSec, const std::string &mood) {
     if (display == nullptr) return;
     const int barH = TIMER_BAR_H;
     const int barY = topH;
@@ -3731,7 +3829,47 @@ void CatchMindGame::drawTimerGauge(int remainSec, int totalSec) {
     int charX = charCX - cSize / 2;
     int charY = barY + (barH - cSize) / 2;
 
-    display->drawPNG("/mnt/nfs/img/character.ppm", charX, charY, cSize, cSize, true);
+    display->drawPNG("/mnt/nfs/img/character.ppm", charX, charY, cSize, cSize);
+    // 플레이어 캐릭터 이미지 (mood 반영)
+    std::string charImgPath = "/mnt/nfs/img/player" + std::to_string(myBoardNum) + "/" + mood + ".ppm";
+    if (!display->drawPNG(charImgPath, charX, charY, cSize, cSize))
+        display->drawPNG("/mnt/nfs/img/character.ppm", charX, charY, cSize, cSize);
+}
+
+void CatchMindGame::showCorrectScreen(int winnerBoardNum, bool iAmWinner, int durationMs) {
+    if (display == nullptr) return;
+    display->beginFrame();
+
+    int cx = screenW / 2;
+    int cy = screenH / 2;
+
+    // 배경 카드
+    int bw = std::min(screenW - 40, 520);
+    int bh = std::min(screenH - 40, 320);
+    int bx = cx - bw / 2;
+    int by = cy - bh / 2;
+    display->drawRect(0, 0, screenW, screenH, 0x00000088);
+    drawPanelCard(display, bx, by, bw, bh, ui::OK, ui::CARD, 0x0b1c10);
+
+    // 정답자 캐릭터 이미지 (smile)
+    int charSize = std::min(bh / 2, bw / 3);
+    int charX = cx - charSize / 2;
+    int charY = by + 12;
+    std::string charPath = "/mnt/nfs/img/player" + std::to_string(winnerBoardNum) + "/smile.ppm";
+    if (!display->drawPNG(charPath, charX, charY, charSize, charSize))
+        display->drawPNG("/mnt/nfs/img/character.ppm", charX, charY, charSize, charSize);
+
+    // "PLAYER X CORRECT!"
+    std::string line1 = "PLAYER " + std::to_string(winnerBoardNum) + " CORRECT!";
+    drawTextCentered(display, cx, charY + charSize + 14, line1, ui::OK, 3);
+
+    // 서브 텍스트
+    std::string line2 = iAmWinner ? "YOU ARE NEXT DRAWER"
+                                  : ("PLAYER " + std::to_string(winnerBoardNum) + " WINS!");
+    drawTextCentered(display, cx, charY + charSize + 48, line2, ui::TEXT_MAIN, 2);
+
+    display->endFrame();
+    usleep(durationMs * 1000);
 }
 
 void CatchMindGame::showFinalScores() {
@@ -3978,6 +4116,17 @@ void CatchMindGame::showFinalScores() {
         const std::string &id = sorted[i].second;
         if (id.rfind("PLAYER", 0) == 0) {
             try { playerNum = std::stoi(id.substr(6)); } catch (...) {}
+        }
+
+        // 캐릭터 이미지 (1위=smile, 2위=normal, 3위=cry)
+        if (playerNum >= 1 && playerNum <= 3) {
+            const char *moodStr[] = {"smile", "normal", "cry"};
+            int charSz = rowH - 6;
+            int charX2 = cx - 200;
+            int charY2 = y + 3;
+            std::string cpath = "/mnt/nfs/img/player" + std::to_string(playerNum) + "/" + moodStr[i] + ".ppm";
+            if (!display->drawPNG(cpath, charX2, charY2, charSz, charSz))
+                display->drawPNG("/mnt/nfs/img/character.ppm", charX2, charY2, charSz, charSz);
         }
 
         std::string plabel;
