@@ -2388,23 +2388,24 @@ bool CatchMindGame::waitForAllPlayersReadyAtStart() {
         if (cur == lastDrawnCount) return;  // 숫자 변화 없으면 스킵
         lastDrawnCount = cur;
         display->beginFrame();
-        display->clearScreen(ui::BG_DARK);
+
+        // 배경 이미지 (PPM) - deploy.sh에서 PNG→PPM 변환된 파일
+        bool hasBg = display->drawPNG("/mnt/nfs/img/main_image.ppm", 0, 0, screenW, screenH);
+        if (!hasBg) {
+            display->clearScreen(ui::BG_DARK);
+        }
 
         int cx = screenW / 2;
-        int cy = screenH / 2;
-        int bw = screenW * 3 / 4;
-        int bh = screenH / 2;
-        int bx = cx - bw / 2;
-        int by = cy - bh / 2;
 
-        drawPanelCard(display, bx - 6, by - 6, bw + 12, bh + 12, ui::ACCENT, ui::CARD, ui::BG_MID);
-        drawTextCentered(display, cx, by + 22, "CATCH MIND", ui::TEXT_MAIN, 4);
-        drawTextCentered(display, cx, by + 60, "ALL PLAYERS MUST BE READY", ui::TEXT_DIM, 1);
+        // 하단 반투명 패널 (READY 버튼 + 카운터 영역)
+        int panelH2 = 180;
+        int panelY = screenH - panelH2;
+        display->drawRect(0, panelY, screenW, panelH2, 0xcc07060f);  // 반투명 어두운 바
 
-        int btnW = 300;
+        int btnW = 340;
         int btnH = 76;
         int btnX = cx - btnW / 2;
-        int btnY = by + bh - 120;
+        int btnY = panelY + 20;
 
         if (myReady) {
             drawPanelCard(display, btnX, btnY, btnW, btnH, ui::TEXT_DIM, 0x2b3138, 0x2b3138);
@@ -2415,8 +2416,8 @@ bool CatchMindGame::waitForAllPlayersReadyAtStart() {
         }
 
         std::string countText = "Ready " + std::to_string((int)readyNodes.size()) + "/" + std::to_string(TOTAL_PLAYERS);
-        drawTextCentered(display, cx, btnY + btnH + 18, countText, ui::ACCENT_WARM, 2);
-        drawTextCentered(display, cx, screenH - 28, "Tap READY or press r", ui::TEXT_DIM, 1);
+        drawTextCentered(display, cx, btnY + btnH + 14, countText, ui::ACCENT_WARM, 2);
+        drawTextCentered(display, cx, screenH - 16, "Tap anywhere to READY", ui::TEXT_DIM, 1);
         display->endFrame();
     };
 

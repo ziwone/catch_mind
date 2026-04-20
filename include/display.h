@@ -81,6 +81,9 @@ public:
     bool isPageFlipEnabled() const { return pageFlipEnabled; }
     bool isSoftwareDoubleBufferEnabled() const { return softwareDoubleBufferEnabled; }
     bool saveFrameToPPM(const std::string &path) const;
+    // PNG 이미지 불러오기 (libpng 필요)
+    // dstX/Y/W/H: 화면상 그리기 영역, 자동 스케일
+    bool drawPNG(const std::string &path, int dstX, int dstY, int dstW, int dstH);
     
     // 편의 색상
     static const unsigned int COLOR_RED;

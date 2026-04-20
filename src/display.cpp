@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <string.h>
 #include <fstream>
+#include <vector>
 #include <linux/kd.h>    // KD_GRAPHICS, KD_TEXT
 
 static int wait_for_vsync(int fd) {
@@ -413,5 +414,62 @@ bool Display::saveFrameToPPM(const std::string &path) const {
         }
     }
 
+    return true;
+}
+
+bool Display::drawPNG(const std::string &path, int dstX, int dstY, int dstW, int dstH) {
+    if (!isInitialized || dstW <= 0 || dstH <= 0) return false;
+
+    // PPM P6 포맷 로더 (deploy.sh에서 PNG→PPM 변환한 파일을 읽음)
+    FILE *fp = fopen(path.c_str(), "rb");
+    if (!fp) {
+        fprintf(stderr, "[Display] drawPNG: cannot open %s\n", path.c_str());
+        return false;
+    }
+
+    // P6 헤더 파싱 ("P6\n", width, height, maxval)
+    char magic[4] = {0};
+    int srcW = 0, srcH = 0, maxVal = 0;
+    if (fscanf(fp, "%3s", magic) != 1 || magic[0] != 'P' || magic[1] != '6') {
+        fprintf(stderr, "[Display] drawPNG: not a P6 PPM: %s\n", path.c_str());
+        fclose(fp);
+        return false;
+    }
+    // 주석 건너맰기
+    int c;
+    while ((c = fgetc(fp)) == '#') {
+        while ((c = fgetc(fp)) != '\n' && c != EOF) {}
+    }
+    ungetc(c, fp);
+    if (fscanf(fp, " %d %d %d", &srcW, &srcH, &maxVal) != 3 || srcW <= 0 || srcH <= 0) {
+        fclose(fp);
+        return false;
+    }
+    fgetc(fp); // maxval 다음 적에 오는 \n 한 글자 건너맴
+
+    // 픽셀 데이터 로드 (RGB 3bytes × srcW × srcH)
+    std::vector<unsigned char> buf((size_t)(srcW * srcH * 3));
+    if (fread(buf.data(), 1, buf.size(), fp) != buf.size()) {
+        fprintf(stderr, "[Display] drawPNG: read error %s\n", path.c_str());
+        fclose(fp);
+        return false;
+    }
+    fclose(fp);
+
+    // 다운스케일 블릿
+    for (int dy = 0; dy < dstH; ++dy) {
+        int sy = (dy * srcH) / dstH;
+        if (sy >= srcH) sy = srcH - 1;
+        const unsigned char *rowPtr = buf.data() + sy * srcW * 3;
+        for (int dx = 0; dx < dstW; ++dx) {
+            int sx = (dx * srcW) / dstW;
+            if (sx >= srcW) sx = srcW - 1;
+            const unsigned char *px = rowPtr + sx * 3;
+            unsigned int color = ((unsigned int)px[0] << 16) |
+                                 ((unsigned int)px[1] << 8)  |
+                                  (unsigned int)px[2];
+            drawPixel(dstX + dx, dstY + dy, color);
+        }
+    }
     return true;
 }
