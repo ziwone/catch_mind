@@ -45,7 +45,7 @@
 #### 출제자 동작
 - 터치 드로잉 → `DRAW|x,y` / `DRAW|UP` 브로드캐스트
 - 캔버스 지우기 → `CLEAR` 브로드캐스트
-- 도전자 답변 수신 → OK / NG 버튼으로 판정
+- 도전자 답변 수신 → **터치(화면 OK/NG 버튼)** 또는 **물리 버튼(SW2/SW3)**으로 판정
   - **OK** → `STATUS|CORRECT_P{N}` 브로드캐스트, 라운드 종료
   - **NG** → `STATUS|A_CLEAR_P{N}` + `STATUS|RETRY_P{N}` 브로드캐스트, 도전자 재도전
 
@@ -180,7 +180,21 @@ bgm/              배경음악 파일
 | 항목 | 내용 |
 |------|------|
 | 라이브러리 | POSIX Threads (`pthread`) |
-| 용도 | FB 모니터 HTTP 서버를 백그라운드 스레드로 분리 |
+| 용도 | FB 모니터 HTTP 서버, GPIO 버튼 감시 스레드를 백그라운드로 분리 |
+
+### 물리 버튼 (GPIO)
+| 항목 | 내용 |
+|------|------|
+| 버튼 | SW2 (정답 OK), SW3 (오답 NG) |
+| GPIO 라인 | line 17 (SW2), line 18 (SW3) |
+| 인터페이스 | Linux GPIO character device API (`/dev/gpiochip0`) |
+| 커널 요구사항 | kernel ≥ 4.8, `CONFIG_GPIO_CDEV=y` |
+| ioctl | `GPIO_GET_LINEEVENT_IOCTL` (`gpioevent_request`) |
+| 트리거 | `GPIOEVENT_REQUEST_FALLING_EDGE` (버튼 누름 하강 에지) |
+| 감지 방식 | `poll(POLLIN)` + 백그라운드 `std::thread` |
+| 플래그 공유 | `std::atomic<bool>` (스레드 ↔ 메인 루프) |
+| 헤더 | `<linux/gpio.h>`, `<poll.h>` |
+| 사용 시점 | 출제자 라운드 진행 중 도전자 답변 수신 후 판정 대기 상태에서만 유효 |
 
 ### 오디오
 | 항목 | 내용 |

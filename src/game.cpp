@@ -1009,6 +1009,26 @@ void CatchMindGame::runChallengerLiveRound() {
     redrawPanels();
     display->endFrame();
 
+    // ── GPIO buttons for challenger (SW2=CLEAR, SW3=SUBMIT) ───────────────
+    struct ChlGpioScope {
+        std::atomic<bool> running{true};
+        std::atomic<bool> sw2{false};  // CLEAR
+        std::atomic<bool> sw3{false};  // SUBMIT
+        std::thread t2, t3;
+        int fd2 = -1, fd3 = -1;
+        ~ChlGpioScope() {
+            running.store(false);
+            if (t2.joinable()) t2.join();
+            if (t3.joinable()) t3.join();
+            if (fd2 >= 0) ::close(fd2);
+            if (fd3 >= 0) ::close(fd3);
+        }
+    } btn;
+    btn.fd2 = gpioOpenCdev(17);
+    btn.fd3 = gpioOpenCdev(18);
+    if (btn.fd2 >= 0) btn.t2 = std::thread(gpioWatchThread, btn.fd2, &btn.sw2, &btn.running);
+    if (btn.fd3 >= 0) btn.t3 = std::thread(gpioWatchThread, btn.fd3, &btn.sw3, &btn.running);
+
 input_phase:
     submitted = false;
 
@@ -1024,6 +1044,31 @@ input_phase:
         timeval tv{}; tv.tv_sec = 0; tv.tv_usec = 20000;
         int ready = select(maxfd + 1, &readfds, nullptr, nullptr, &tv);
         if (ready < 0) { if (errno == EINTR) continue; break; }
+
+        // ── Physical buttons: SW2=CLEAR, SW3=SUBMIT ──────────────────────
+        if (btn.sw2.exchange(false)) {
+            // SW2: clear answer area
+            answerInkWritten = false;
+            answerStrokeActive = false;
+            haveRecentAnswerEnd = false;
+            queuedInkPoints.clear();
+            display->beginFrame();
+            redrawMyPanelClean();
+            display->endFrame();
+            sendAnswerControl("A_CLEAR", std::to_string(myPlayerNumber));
+            fprintf(stderr, "[Button] SW2 -> CLEAR\n");
+        }
+        if (btn.sw3.exchange(false)) {
+            // SW3: submit answer
+            if (!submitted && !submitLocked && answerInkWritten) {
+                flushQueuedInk();
+                myAnswerInput = "DRAWN";
+                broadcastAnswer(myPlayerNumber, myAnswerInput);
+                submitted = true;
+                fprintf(stderr, "[Button] SW3 -> SUBMIT\n");
+                std::cout << "[P" << myPlayerNumber << "] : HANDWRITING (button)\n";
+            }
+        }
 
         // Challenger info panel update (once per second)
         {
