@@ -135,3 +135,71 @@ img/
   player{1-3}/    보드별 캐릭터 (smile/normal/cry)
 bgm/              배경음악 파일
 ```
+
+---
+
+## 사용 기술 정리
+
+### 언어 및 표준
+| 항목 | 내용 |
+|------|------|
+| 언어 | C++17, C (fb_server) |
+| 빌드 | aarch64-linux-gnu-g++ (크로스컴파일), Makefile |
+| 타깃 플랫폼 | Linux aarch64 (Cortex-A 계열 SBC) |
+
+### 디스플레이
+| 항목 | 내용 |
+|------|------|
+| 출력 장치 | Linux Framebuffer (`/dev/fb0`) |
+| API | `ioctl(FBIOGET_VSCREENINFO)`, `mmap` |
+| 더블 버퍼링 | 소프트웨어 섀도우 버퍼 + `memcpy` 플립 |
+| 폰트 렌더링 | 5×7 비트맵 폰트 직접 구현 (외부 라이브러리 없음) |
+| 이미지 로딩 | PPM(P6) 바이너리 포맷 파싱 (직접 구현) |
+| VSync | `FBIO_WAITFORVSYNC` ioctl |
+| 커서 숨기기 | `/dev/tty` `KDSETMODE KD_GRAPHICS` |
+
+### 터치 입력
+| 항목 | 내용 |
+|------|------|
+| 입력 장치 | Linux Input Subsystem (`/dev/input/event*`) |
+| 이벤트 타입 | `ABS_MT_POSITION_X/Y`, `BTN_TOUCH`, `SYN_REPORT` |
+| 헤더 | `<linux/input.h>` |
+| 좌표 보정 | Raw ADC 값 → 화면 픽셀 좌표 선형 매핑 |
+
+### 네트워크
+| 항목 | 내용 |
+|------|------|
+| 프로토콜 | UDP 소켓, 브로드캐스트 (`SO_BROADCAST`) |
+| 포트 | 37031 |
+| 다중화 | `select()` 기반 논블로킹 I/O |
+| IP 감지 | `getifaddrs()` + `AF_INET` 루프백 제외 |
+| 재전송 | 중요 메시지 3~4회 반복 (150ms 간격) |
+| 동기화 배리어 | `DRAWING_START` × 4 + `waitForGameReady()` |
+
+### 멀티스레딩
+| 항목 | 내용 |
+|------|------|
+| 라이브러리 | POSIX Threads (`pthread`) |
+| 용도 | FB 모니터 HTTP 서버를 백그라운드 스레드로 분리 |
+
+### 오디오
+| 항목 | 내용 |
+|------|------|
+| 재생 방식 | `fork` + `execl`로 `aplay` 프로세스 실행 |
+| 볼륨 제어 | `amixer cset numid=1` |
+| 카드 선택 | `/mnt/nfs/alsa_card` 파일로 런타임 설정 |
+| 포맷 | WAV (PCM) |
+
+### 시간 처리
+| 항목 | 내용 |
+|------|------|
+| 타이머 | `std::chrono::steady_clock` |
+| 대기 | `usleep`, `select` 타임아웃 |
+
+### FB 모니터 서버
+| 항목 | 내용 |
+|------|------|
+| 구현 | C 단일 파일 (`fb_server.c`) |
+| 기능 | `/dev/fb0`를 PPM으로 캡처 → HTTP GET으로 브라우저 전송 |
+| 포트 | 8080 |
+| 용도 | 보드 화면 원격 확인 (개발/디버깅) |
