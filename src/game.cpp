@@ -319,51 +319,61 @@ void CatchMindGame::start() {
     printf("\033[?25l");
     fflush(stdout);
 
-
-
     std::cout << "=====================================\n";
     std::cout << "=====================================\n";
 
     initRoleSocket();
 
+    while (true) {  // restart loop: returns here after each game ends
 
-    if (!waitForAllPlayersReadyAtStart()) {
-        stop();
-        return;
-    }
+        // ── Reset all game state ──────────────────────────────────────────
+        gameScores.clear();
+        gameScores["PLAYER1"] = 0;
+        gameScores["PLAYER2"] = 0;
+        gameScores["PLAYER3"] = 0;
+        round = 0;
+        isDrawerRole = false;
+        drawerIp.clear();
+        currentDrawerNodeId.clear();
+        myPlayerNumber = 0;
+        myAnswerInput.clear();
+        receivedAnswer1.clear();
+        receivedAnswer2.clear();
+        answerReceived1 = false;
+        answerReceived2 = false;
 
-
-    gameScores.clear();
-    gameScores["PLAYER1"] = 0;
-    gameScores["PLAYER2"] = 0;
-    gameScores["PLAYER3"] = 0;
-    round = 0;
-
-    bgm.setVolume(80);
-    bgm.play("/mnt/nfs/bgm/maple1.wav");
-
-    while (round < MAX_ROUNDS) {
-        if (!roleSelection()) {
+        if (!waitForAllPlayersReadyAtStart()) {
             stop();
             return;
         }
 
-        if (isDrawerRole) {
-            if (!selectCategoryAndWord()) {
-                continue;
+        bgm.setVolume(80);
+        bgm.play("/mnt/nfs/bgm/maple1.wav");
+
+        while (round < MAX_ROUNDS) {
+            if (!roleSelection()) {
+                stop();
+                return;
             }
-            runSingleBoardRound();
-        } else {
-            runChallengerStandby();
+
+            if (isDrawerRole) {
+                if (!selectCategoryAndWord()) {
+                    continue;
+                }
+                runSingleBoardRound();
+            } else {
+                runChallengerStandby();
+            }
+
+            round++;
+            std::cout << "[]     ( " << round << "/" << MAX_ROUNDS << ")\n\n";
         }
 
-        round++;
-        std::cout << "[]     ( " << round << "/" << MAX_ROUNDS << ")\n\n";
+        broadcastStatusMessage("GAME_OVER");
+        showFinalScores();
+        // showFinalScores() returns after the player confirms → restart
+        std::cout << "[Game] Restarting...\n";
     }
-
-
-    broadcastStatusMessage("GAME_OVER");
-    showFinalScores();
 }
 
 void CatchMindGame::stop() {
@@ -469,7 +479,6 @@ bool CatchMindGame::roleSelection() {
                 if (kind == "STATUS" && value == "GAME_OVER") {
                     std::cout << "[Challenger] GAME_OVER -> final scores\n";
                     showFinalScores();
-                    stop();
                     return false;
                 }
                 if (kind == "ROLE" && value == "DRAWER") {
@@ -697,7 +706,6 @@ void CatchMindGame::runChallengerStandby() {
                     if (value == "GAME_OVER") {
                         std::cout << "[Challenger] GAME_OVER -> final scores\n";
                         showFinalScores();
-                        stop();
                         return;
                     }
                     if (value == "WORD_SELECTING" && display != nullptr) {
@@ -817,18 +825,18 @@ void CatchMindGame::runChallengerLiveRound() {
     const int halfW = screenW / 2;
     const int myPanelX = (myPlayerNumber == 1) ? 0 : halfW;
     const int myPanelW = (myPlayerNumber == 1) ? halfW : (screenW - halfW);
-    const int btnW = 130;  // 92 → 130
-    const int btnH = 48;   // 34 → 48
+    const int btnW = 130;
+    const int btnH = 48;
     const int btnX = myPanelX + myPanelW - btnW - 8;
     const int btnY = bottomY + panelH - btnH - 8;
     const int clearW = 98;
     const int clearH = 40;
-    const int clearX = btnX - clearW - 10;
+    const int clearX = btnX - clearW - 20;  // gap 10→20
     const int clearY = btnY + (btnH - clearH) / 2;
     const int writeX = myPanelX + 8;
     const int writeY = bottomY + 24;
     const int writeW = myPanelW - 16;
-    const int writeH = std::max(30, btnY - writeY - 6);
+    const int writeH = std::max(40, btnY - writeY - 8);  // 하한 30→40, 여백 6→8
     const int writeMax = 999;
 
     bool answerInkWritten = false;
@@ -907,7 +915,7 @@ void CatchMindGame::runChallengerLiveRound() {
         int sx = areaX + (nx * std::max(1, areaW - 1)) / 999;
         int sy = areaY + (ny * std::max(1, areaH - 1)) / 999;
         if (!otherStrokeActive) {
-            display->drawRect(sx - 2, sy - 2, 5, 5, Display::COLOR_WHITE);
+            display->drawRect(sx - 1, sy - 1, 2, 2, Display::COLOR_WHITE);
             otherLastX = sx;
             otherLastY = sy;
             otherStrokeActive = true;
@@ -919,7 +927,7 @@ void CatchMindGame::runChallengerLiveRound() {
         for (int i = 1; i <= steps; ++i) {
             int px = otherLastX + (dx * i) / steps;
             int py = otherLastY + (dy * i) / steps;
-            display->drawRect(px - 2, py - 2, 5, 5, Display::COLOR_WHITE);
+            display->drawRect(px - 1, py - 1, 2, 2, Display::COLOR_WHITE);
         }
         otherLastX = sx;
         otherLastY = sy;
@@ -1137,7 +1145,7 @@ input_phase:
                             unsigned int color = (unsigned int)std::stoul(colorStr, nullptr, 16);
                             if (sx >= canvasX && sx < canvasX + canvasW &&
                                 sy >= canvasY && sy < canvasY + canvasH) {
-                                int dotSize = (color == Display::COLOR_BLACK) ? 13 : 5;
+                                int dotSize = (color == Display::COLOR_BLACK) ? 9 : 2;
                                 int half = dotSize / 2;
                                 display->drawRect(sx - half, sy - half, dotSize, dotSize, color);
                             }
@@ -1224,7 +1232,6 @@ input_phase:
                 } else if (kind == "STATUS" && value == "GAME_OVER") {
                     std::cout << "[Challenger P" << myPlayerNumber << "] GAME_OVER\n";
                     showFinalScores();
-                    stop();
                     return;
                 } else if (kind == "STATUS" && value.rfind("HINT#", 0) == 0) {
                     hintWord = value.substr(5);
@@ -1287,14 +1294,14 @@ input_phase:
                                         for (int i = 1; i <= bsteps; ++i) {
                                             int px = recentAnswerEndX + (gdx * i) / bsteps;
                                             int py = recentAnswerEndY + (gdy * i) / bsteps;
-                                            display->drawRect(px - 2, py - 2, 5, 5, Display::COLOR_WHITE);
+                                            display->drawRect(px - 1, py - 1, 2, 2, Display::COLOR_WHITE);
                                             sendAnswerPoint(px, py);
                                         }
                                     }
                                     haveRecentAnswerEnd = false;
                                 }
 
-                                display->drawRect(sx - 2, sy - 2, 5, 5, Display::COLOR_WHITE);
+                                display->drawRect(sx - 1, sy - 1, 2, 2, Display::COLOR_WHITE);
                                 answerLastX = sx;
                                 answerLastY = sy;
                                 answerStrokeActive = true;
@@ -1307,7 +1314,7 @@ input_phase:
                                 for (int i = 1; i <= steps; ++i) {
                                     int px = answerLastX + (dx * i) / steps;
                                     int py = answerLastY + (dy * i) / steps;
-                                    display->drawRect(px - 2, py - 2, 5, 5, Display::COLOR_WHITE);
+                                    display->drawRect(px - 1, py - 1, 2, 2, Display::COLOR_WHITE);
                                     sendAnswerPoint(px, py);
                                 }
                                 answerLastX = sx;
@@ -1501,7 +1508,6 @@ input_phase:
                     } else if (value == "GAME_OVER") {
                         std::cout << "[Challenger] GAME_OVER -> final scores\n";
                         showFinalScores();
-                        stop();
                         return;
                     } else if ((value == "RETRY_P1" && myPlayerNumber == 1) ||
                                (value == "RETRY_P2" && myPlayerNumber == 2)) {
@@ -1512,6 +1518,7 @@ input_phase:
                         myAnswerInput.clear();
                         answerInkWritten = false;
                         answerStrokeActive = false;
+                        submitLocked = false;  // ensure SUBMIT is re-enabled
                         queuedInkPoints.clear();
                         display->beginFrame();
                         redrawPanels();
@@ -1565,7 +1572,7 @@ input_phase:
                             unsigned int color = (unsigned int)std::stoul(colorStr, nullptr, 16);
                             if (sx >= canvasX && sx < canvasX + canvasW &&
                                 sy >= canvasY && sy < canvasY + canvasH) {
-                                int dotSize = (color == Display::COLOR_BLACK) ? 13 : 5;
+                                int dotSize = (color == Display::COLOR_BLACK) ? 9 : 2;
                                 int half = dotSize / 2;
                                 display->drawRect(sx - half, sy - half, dotSize, dotSize, color);
                             }
@@ -1724,7 +1731,15 @@ bool CatchMindGame::showConfirmDialog(const std::string &selectedText) {
 
 bool CatchMindGame::selectCategoryAndWord() {
 
-    usleep(500000);  // 500ms
+    // Flush any residual touch events from the previous screen
+    if (touchFd >= 0) {
+        input_event tmp{};
+        while (read(touchFd, &tmp, sizeof(tmp)) == (ssize_t)sizeof(tmp)) {}
+        touchPressed = false;
+        touchHasX    = false;
+        touchHasY    = false;
+    }
+    usleep(300000);  // 300 ms grace period
 
     std::vector<std::string> allCategories;
     for (const auto &kv : wordBank) {
@@ -1966,7 +1981,7 @@ void CatchMindGame::runSingleBoardRound() {
         int &ly = (playerNum == 1) ? answerLastDrawY1 : answerLastDrawY2;
 
         if (!active) {
-            display->drawRect(sx - 2, sy - 2, 5, 5, Display::COLOR_WHITE);
+            display->drawRect(sx - 1, sy - 1, 2, 2, Display::COLOR_WHITE);
             lx = sx;
             ly = sy;
             active = true;
@@ -1980,7 +1995,7 @@ void CatchMindGame::runSingleBoardRound() {
         for (int i = 1; i <= steps; ++i) {
             int px = lx + (dx * i) / steps;
             int py = ly + (dy * i) / steps;
-            display->drawRect(px - 2, py - 2, 5, 5, Display::COLOR_WHITE);
+            display->drawRect(px - 1, py - 1, 2, 2, Display::COLOR_WHITE);
         }
         lx = sx;
         ly = sy;
@@ -2333,7 +2348,6 @@ void CatchMindGame::runSingleBoardRound() {
                     isDrawing = false;
                     roundEnded = true;
                     showFinalScores();
-                    stop();
                     return;
                 }
             }
@@ -2385,6 +2399,15 @@ void CatchMindGame::runSingleBoardRound() {
     if (sw3Thread.joinable()) sw3Thread.join();
     if (sw2Fd >= 0) close(sw2Fd);
     if (sw3Fd >= 0) close(sw3Fd);
+
+    // Flush touch buffer so residual taps don't bleed into category selection
+    if (touchFd >= 0) {
+        input_event tmp{};
+        while (read(touchFd, &tmp, sizeof(tmp)) == (ssize_t)sizeof(tmp)) {}
+        touchPressed = false;
+        touchHasX    = false;
+        touchHasY    = false;
+    }
 }
 
 bool CatchMindGame::handleGuess(int playerIndex, const std::string &answer) {
@@ -2482,7 +2505,7 @@ void CatchMindGame::drawBrushDot(int x, int y) {
     if (display == nullptr) {
         return;
     }
-    int dotSize = (brushColor == Display::COLOR_BLACK) ? 13 : 5;
+    int dotSize = (brushColor == Display::COLOR_BLACK) ? 9 : 2;
     int half = dotSize / 2;
     display->drawRect(x - half, y - half, dotSize, dotSize, brushColor);
 }
@@ -3990,8 +4013,6 @@ void CatchMindGame::drawTimerGauge(int remainSec, int totalSec, const std::strin
     int charX = charCX - cSize / 2;
     int charY = barY + (barH - cSize) / 2;
 
-    display->drawPNG("/mnt/nfs/img/character.ppm", charX, charY, cSize, cSize);
-
     std::string charImgPath = "/mnt/nfs/img/player" + std::to_string(myBoardNum) + "/" + mood + ".ppm";
     if (!display->drawPNG(charImgPath, charX, charY, cSize, cSize))
         display->drawPNG("/mnt/nfs/img/character.ppm", charX, charY, cSize, cSize);
@@ -4000,16 +4021,15 @@ void CatchMindGame::drawTimerGauge(int remainSec, int totalSec, const std::strin
 void CatchMindGame::showCorrectScreen(int winnerBoardNum, bool iAmWinner, int durationMs) {
     if (display == nullptr) return;
     display->beginFrame();
+    display->clearScreen(ui::BG_DARK);
 
     int cx = screenW / 2;
     int cy = screenH / 2;
-
 
     int bw = std::min(screenW - 40, 520);
     int bh = std::min(screenH - 40, 320);
     int bx = cx - bw / 2;
     int by = cy - bh / 2;
-    display->drawRect(0, 0, screenW, screenH, 0x00000088);
     drawPanelCard(display, bx, by, bw, bh, ui::OK, ui::CARD, 0x0b1c10);
 
 
@@ -4255,23 +4275,35 @@ void CatchMindGame::showFinalScores() {
     drawTextCentered(display, cx, 18, "GAME OVER", ui::NG, 4);
     drawTextCentered(display, cx, 60, "FINAL SCORES", ui::TEXT_DIM, 1);
 
-    const char  *rankEmoji[] = {"#1", "#2", "#3"};
-    const unsigned int rankColor[] = {0xFFD700, 0xC0C0C0, 0xCD7F32};
-
     int startY = 90;
     int rowH = (screenH - startY - 60) / 3;
     rowH = std::max(56, std::min(rowH, 72));
 
-    for (int i = 0; i < (int)sorted.size() && i < 3; ++i) {
-        int y = startY + i * (rowH + 8);
-        unsigned int rc = rankColor[i];
+    // Compute actual ranks (ties share the same rank)
+    // e.g. 7 7 5 → rank 1 1 3,  7 5 5 → rank 1 2 2,  all equal → rank 1 1 1
+    std::vector<int> ranks(sorted.size());
+    for (int i = 0; i < (int)sorted.size(); ++i) {
+        int r = 1;
+        for (int j = 0; j < i; ++j) {
+            if (sorted[j].first > sorted[i].first) ++r;
+        }
+        ranks[i] = r;
+    }
 
+    const unsigned int rankColor_all[] = {0xFFD700, 0xC0C0C0, 0xCD7F32, 0xAAAAAA};
+
+    for (int i = 0; i < (int)sorted.size() && i < 3; ++i) {
+        int rank = ranks[i];                          // 1-based actual rank
+        int colorIdx = std::min(rank - 1, 3);         // clamp to array bounds
+        unsigned int rc = rankColor_all[colorIdx];
+        std::string rankLabel = "#" + std::to_string(rank);
+
+        int y = startY + i * (rowH + 8);
 
         display->drawRect(cx - 240, y, 480, rowH, ui::BG_MID);
         drawPanelCard(display, cx - 240, y, 480, rowH, rc, ui::CARD, ui::BG_MID);
 
-
-        display->drawText(cx - 228, y + rowH / 2 - 12, rankEmoji[i], rc, 2);
+        display->drawText(cx - 228, y + rowH / 2 - 12, rankLabel.c_str(), rc, 2);
 
         int playerNum = 0;
         const std::string &id = sorted[i].second;
@@ -4279,13 +4311,13 @@ void CatchMindGame::showFinalScores() {
             try { playerNum = std::stoi(id.substr(6)); } catch (...) {}
         }
 
-
         if (playerNum >= 1 && playerNum <= 3) {
-            const char *moodStr[] = {"smile", "normal", "cry"};
+            // mood: 1st place smile, 2nd normal, 3rd+ cry
+            const char *moodStr = (rank == 1) ? "smile" : (rank == 2) ? "normal" : "cry";
             int charSz = rowH - 6;
             int charX2 = cx - 200;
             int charY2 = y + 3;
-            std::string cpath = "/mnt/nfs/img/player" + std::to_string(playerNum) + "/" + moodStr[i] + ".ppm";
+            std::string cpath = "/mnt/nfs/img/player" + std::to_string(playerNum) + "/" + moodStr + ".ppm";
             if (!display->drawPNG(cpath, charX2, charY2, charSz, charSz))
                 display->drawPNG("/mnt/nfs/img/character.ppm", charX2, charY2, charSz, charSz);
         }
@@ -4335,4 +4367,14 @@ void CatchMindGame::showFinalScores() {
             if (tapped) break;
         }
     }
+
+    // Drain any residual touch events so they don't fire in the next screen
+    if (touchFd >= 0) {
+        input_event tmp{};
+        while (read(touchFd, &tmp, sizeof(tmp)) == (ssize_t)sizeof(tmp)) {}
+        touchPressed = false;
+        touchHasX    = false;
+        touchHasY    = false;
+    }
+    usleep(400000);  // 400 ms grace period before restart
 }
