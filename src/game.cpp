@@ -1,8 +1,10 @@
 #include "game.h"
 #include "wordbank.h"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <set>
+#include <thread>
 #include <arpa/inet.h>
 #include <cctype>
 #include <cerrno>
@@ -10,10 +12,12 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <ifaddrs.h>
+#include <linux/gpio.h>
 #include <iostream>
 #include <linux/input.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sstream>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -39,6 +43,52 @@ constexpr unsigned int OK         = 0x00e87a;
 constexpr unsigned int NG         = 0xff4d7a;
 }
 constexpr int TIMER_BAR_H = 28;  // full-width timer bar height
+
+// ── Hardware button (GPIO character device, /dev/gpiochipN) ──────────────
+// Linux GPIO cdev API (kernel >= 4.8). Returns an event fd polled with POLLIN.
+// chip=0 tries /dev/gpiochip0 first, then /dev/gpiochip1 on failure.
+static int gpioOpenCdev(int line) {
+    for (int chip = 0; chip <= 1; ++chip) {
+        char path[32];
+        snprintf(path, sizeof(path), "/dev/gpiochip%d", chip);
+        int chipFd = open(path, O_RDONLY);
+        if (chipFd < 0) continue;
+
+        struct gpioevent_request req = {};
+        req.lineoffset  = (uint32_t)line;
+        req.handleflags = GPIOHANDLE_REQUEST_INPUT;
+        req.eventflags  = GPIOEVENT_REQUEST_FALLING_EDGE;
+        snprintf(req.consumer_label, sizeof(req.consumer_label), "catch_mind");
+
+        if (ioctl(chipFd, GPIO_GET_LINEEVENT_IOCTL, &req) < 0) {
+            fprintf(stderr, "[Button] gpiochip%d line%d: %s\n", chip, line, strerror(errno));
+            close(chipFd);
+            continue;
+        }
+        close(chipFd);
+        fprintf(stderr, "[Button] gpiochip%d line%d fd=%d ready\n", chip, line, req.fd);
+        return req.fd;
+    }
+    fprintf(stderr, "[Button] line%d: all chips failed\n", line);
+    return -1;
+}
+
+// Watch one GPIO event fd with poll(POLLIN); set flag on falling edge.
+// Runs in a background thread. Exits when *running becomes false.
+static void gpioWatchThread(int gpioFd, std::atomic<bool> *pressed,
+                            const std::atomic<bool> *running) {
+    if (gpioFd < 0) return;
+    struct pollfd pfd { gpioFd, POLLIN, 0 };
+    while (running->load()) {
+        pfd.revents = 0;
+        if (poll(&pfd, 1, 100) > 0 && (pfd.revents & POLLIN)) {
+            struct gpioevent_data ev;
+            read(gpioFd, &ev, sizeof(ev));
+            pressed->store(true);
+            fprintf(stderr, "[Button] fd=%d pressed (id=%u)\n", gpioFd, ev.id);
+        }
+    }
+}
 
 
 
@@ -1909,6 +1959,17 @@ void CatchMindGame::runSingleBoardRound() {
     std::string line;
     bool judgingActive = false;
     bool roundEnded = false;
+    int  pendingJudgePlayer = 0;
+
+    // GPIO button setup (SW2=line17 → OK, SW3=line18 → NG)
+    int sw2Fd = gpioOpenCdev(17);
+    int sw3Fd = gpioOpenCdev(18);
+    std::atomic<bool> sw2Pressed{false};
+    std::atomic<bool> sw3Pressed{false};
+    std::atomic<bool> btnRunning{true};
+    std::thread sw2Thread, sw3Thread;
+    if (sw2Fd >= 0) sw2Thread = std::thread(gpioWatchThread, sw2Fd, &sw2Pressed, &btnRunning);
+    if (sw3Fd >= 0) sw3Thread = std::thread(gpioWatchThread, sw3Fd, &sw3Pressed, &btnRunning);
 
     // Slot index (1/2)
     std::unordered_map<int, int> slotToBoard;
@@ -1963,6 +2024,7 @@ void CatchMindGame::runSingleBoardRound() {
             broadcastStatusMessage("RETRY_P2");
         }
         judgingActive = false;
+        pendingJudgePlayer = 0;
         broadcastStatusMessage("JUDGING_END");
     };
 
@@ -1987,6 +2049,20 @@ void CatchMindGame::runSingleBoardRound() {
 
         int ready = select(maxfd + 1, &readfds, nullptr, nullptr, &tv);
         if (ready < 0) { std::perror("select"); break; }
+
+        // ── Hardware buttons: atomic flags set by background threads ──────────
+        if (judgingActive && pendingJudgePlayer > 0 && !roundEnded) {
+            if (sw2Pressed.exchange(false)) {
+                std::cout << "[Button] SW2 OK -> P" << pendingJudgePlayer << "\n";
+                judgeOk(pendingJudgePlayer);
+            } else if (sw3Pressed.exchange(false)) {
+                std::cout << "[Button] SW3 NG -> P" << pendingJudgePlayer << "\n";
+                judgeNg(pendingJudgePlayer);
+            }
+        } else {
+            sw2Pressed.store(false);  // discard spurious presses outside judging
+            sw3Pressed.store(false);
+        }
 
 
         auto now = std::chrono::steady_clock::now();
@@ -2139,6 +2215,7 @@ void CatchMindGame::runSingleBoardRound() {
 
 
                         judgingActive = true;
+                        pendingJudgePlayer = pn;
                         broadcastStatusMessage("JUDGING_ACTIVE");
 
                         // Submit highlight: panel border + top banner
@@ -2256,6 +2333,13 @@ void CatchMindGame::runSingleBoardRound() {
         broadcastStatusMessage("ROUND_END");
         sleep(1);
     }
+
+    // Stop button threads and close GPIO fds
+    btnRunning.store(false);
+    if (sw2Thread.joinable()) sw2Thread.join();
+    if (sw3Thread.joinable()) sw3Thread.join();
+    if (sw2Fd >= 0) close(sw2Fd);
+    if (sw3Fd >= 0) close(sw3Fd);
 }
 
 bool CatchMindGame::handleGuess(int playerIndex, const std::string &answer) {
