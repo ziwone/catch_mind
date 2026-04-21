@@ -5,8 +5,8 @@
 - 역할: 출제자 1명 + 도전자 2명
 - 라운드 수: 3라운드 (`MAX_ROUNDS = 3`)
 - 라운드 제한 시간: 60초 (`ROUND_TIMEOUT_SEC = 60`)
-- 단어 은행: `include/wordbank.h` (7개 카테고리, 카테고리당 약 40개)
-  - `ANIMAL` / `FRUIT` / `FOOD` / `OBJECT` / `NATURE` / `SPORT` / `PLACE`
+- 단어 은행: `include/wordbank.h` (7개 카테고리, 카테고리당 15~26개)
+  - `ANIMAL`(24) / `FRUIT`(17) / `FOOD`(21) / `OBJECT`(24) / `NATURE`(15) / `SPORT`(17) / `PLACE`(19)
 
 ---
 
@@ -51,7 +51,10 @@
 
 #### 도전자 동작
 - 출제자 드로잉 실시간 수신 및 화면 반영
-- 터치 키패드로 답 입력 후 제출
+- 터치 드로잉으로 답 작성 후 제출 (`A_DRAW|pn,x,y` / `A_DRAW|pn,UP` 브로드캐스트)
+- **터치 버튼** 또는 **물리 버튼**으로 조작
+  - **CLEAR** (터치 버튼 또는 SW2): 작성 중인 답변 지우기
+  - **SUBMIT** (터치 버튼 또는 SW3): 답변 제출
 - NG 수신 시: 답변 패널 초기화, 캐릭터 3초 cry 표정 후 normal 복귀
 - 정답 수신 시: 캐릭터 smile 표정, 정답 화면 표시
 
@@ -85,6 +88,12 @@
 
 - `FINAL_SCORE_SUBMIT` 메시지로 전체 보드 점수 집계 (PLAYER1이 aggregator 역할)
 - 전체 라운드 종료 후 `STATUS|GAME_OVER` 브로드캐스트 → 최종 점수판 표시
+
+#### 최종 점수판
+- 3명의 점수를 내림차순 정렬 후 등수 표시
+- **동점자는 같은 등수** 부여 (예: 7점 동점 2명 → 1등·1등·3등)
+- 등수별 색상: 1등 금색, 2등 은색, 3등 동색
+- 점수판 확인 후 자동으로 **역할 선택 화면부터 재시작** (프로세스 종료 없음)
 
 ---
 
@@ -165,6 +174,7 @@ bgm/              배경음악 파일
 | 이벤트 타입 | `ABS_MT_POSITION_X/Y`, `BTN_TOUCH`, `SYN_REPORT` |
 | 헤더 | `<linux/input.h>` |
 | 좌표 보정 | Raw ADC 값 → 화면 픽셀 좌표 선형 매핑 |
+| 버퍼 드레인 | 화면 전환 시 `read()` 루프로 이벤트 버퍼 소진 → ghost click 방지 |
 
 ### 네트워크
 | 항목 | 내용 |
@@ -179,8 +189,9 @@ bgm/              배경음악 파일
 ### 멀티스레딩
 | 항목 | 내용 |
 |------|------|
-| 라이브러리 | POSIX Threads (`pthread`) |
+| 라이브러리 | POSIX Threads (`pthread`) / C++ `std::thread` |
 | 용도 | FB 모니터 HTTP 서버, GPIO 버튼 감시 스레드를 백그라운드로 분리 |
+| 생명주기 관리 | RAII 구조체로 스레드/fd 자동 해제 (`std::atomic<bool>` running 플래그 + `join()` + `close()`) |
 
 ### 물리 버튼 (GPIO)
 | 항목 | 내용 |
@@ -194,7 +205,7 @@ bgm/              배경음악 파일
 | 감지 방식 | `poll(POLLIN)` + 백그라운드 `std::thread` |
 | 플래그 공유 | `std::atomic<bool>` (스레드 ↔ 메인 루프) |
 | 헤더 | `<linux/gpio.h>`, `<poll.h>` |
-| 사용 시점 | 출제자 라운드 진행 중 도전자 답변 수신 후 판정 대기 상태에서만 유효 |
+| 사용 시점 | **출제자**: 도전자 답변 수신 후 판정 대기 중 (SW2=OK, SW3=NG) / **도전자**: 답변 입력 중 (SW2=CLEAR, SW3=SUBMIT) |
 
 ### 오디오
 | 항목 | 내용 |
