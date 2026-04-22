@@ -80,7 +80,12 @@ typedef struct {
  * 리턴값: 동적 할당된 BMP 버퍼 (해제는 호출자)
  * *out_size 에 크기 저장
  */
+/* 2배 다운스케일해서 VM 수신 데이터량 1/4로 줄임 */
+#define FB_SCALE 2
+
 static uint8_t *fb_to_bmp(int w, int h, int bpp, size_t *out_size) {
+    int outW = w / FB_SCALE;
+    int outH = h / FB_SCALE;
     int fd = open("/dev/fb0", O_RDONLY);
     if (fd < 0) return NULL;
 
@@ -97,10 +102,10 @@ static uint8_t *fb_to_bmp(int w, int h, int bpp, size_t *out_size) {
     close(fd);
 
     /* BMP 행 패딩: 4바이트 정렬 */
-    int row_stride = w * 3;
+    int row_stride = outW * 3;
     int pad = (4 - (row_stride % 4)) % 4;
     int padded_row = row_stride + pad;
-    size_t pixel_size = (size_t)padded_row * h;
+    size_t pixel_size = (size_t)padded_row * outH;
     size_t total = sizeof(BmpFileHeader) + sizeof(BmpDibHeader) + pixel_size;
 
     uint8_t *buf = malloc(total);
@@ -116,8 +121,8 @@ static uint8_t *fb_to_bmp(int w, int h, int bpp, size_t *out_size) {
 
     BmpDibHeader *dh = (BmpDibHeader *)(buf + sizeof(BmpFileHeader));
     dh->header_size      = sizeof(BmpDibHeader);
-    dh->width            = w;
-    dh->height           = -h;  /* top-down */
+    dh->width            = outW;
+    dh->height           = -outH;  /* top-down */
     dh->planes           = 1;
     dh->bpp              = 24;
     dh->compression      = 0;
@@ -127,31 +132,40 @@ static uint8_t *fb_to_bmp(int w, int h, int bpp, size_t *out_size) {
     dh->colors_used      = 0;
     dh->colors_important = 0;
 
-    /* 픽셀 변환 (RGB → BGR for BMP) */
+    /* 픽셀 변환 + 2x2 블록 평균 다운스케일 (RGB → BGR for BMP) */
     uint8_t *dst = buf + fh->offset;
-    for (int y = 0; y < h; y++) {
-        uint8_t *row_dst = dst + (size_t)y * padded_row;
-        for (int x = 0; x < w; x++) {
-            uint8_t r, g, b;
-            if (bpp == 16) {
-                uint16_t p;
-                memcpy(&p, fb + ((size_t)y * w + x) * 2, 2);
-                r = ((p >> 11) & 0x1F) * 255 / 31;
-                g = ((p >>  5) & 0x3F) * 255 / 63;
-                b = ( p        & 0x1F) * 255 / 31;
-            } else if (bpp == 32) {
-                /* BGRA (RPi 기본 포맷) */
-                const uint8_t *px = fb + ((size_t)y * w + x) * 4;
-                b = px[0]; g = px[1]; r = px[2];
-            } else { /* 24bpp RGB */
-                const uint8_t *px = fb + ((size_t)y * w + x) * 3;
-                r = px[0]; g = px[1]; b = px[2];
+    for (int dy = 0; dy < outH; dy++) {
+        int sy = dy * FB_SCALE;
+        int sy1 = (sy + 1 < h) ? sy + 1 : sy;
+        uint8_t *row_dst = dst + (size_t)dy * padded_row;
+        for (int dx = 0; dx < outW; dx++) {
+            int sx = dx * FB_SCALE;
+            int sx1 = (sx + 1 < w) ? sx + 1 : sx;
+            unsigned int r = 0, g = 0, b = 0;
+            /* 2x2 이웃 4픽셀 평균 */
+            int coords[4][2] = { {sy, sx}, {sy, sx1}, {sy1, sx}, {sy1, sx1} };
+            for (int k = 0; k < 4; k++) {
+                int cy = coords[k][0], cx = coords[k][1];
+                uint8_t pr, pg, pb;
+                if (bpp == 16) {
+                    uint16_t p;
+                    memcpy(&p, fb + ((size_t)cy * w + cx) * 2, 2);
+                    pr = ((p >> 11) & 0x1F) * 255 / 31;
+                    pg = ((p >>  5) & 0x3F) * 255 / 63;
+                    pb = ( p        & 0x1F) * 255 / 31;
+                } else if (bpp == 32) {
+                    const uint8_t *px = fb + ((size_t)cy * w + cx) * 4;
+                    pb = px[0]; pg = px[1]; pr = px[2];
+                } else {
+                    const uint8_t *px = fb + ((size_t)cy * w + cx) * 3;
+                    pr = px[0]; pg = px[1]; pb = px[2];
+                }
+                r += pr; g += pg; b += pb;
             }
-            row_dst[x * 3 + 0] = b;
-            row_dst[x * 3 + 1] = g;
-            row_dst[x * 3 + 2] = r;
+            row_dst[dx * 3 + 0] = (uint8_t)(b / 4);
+            row_dst[dx * 3 + 1] = (uint8_t)(g / 4);
+            row_dst[dx * 3 + 2] = (uint8_t)(r / 4);
         }
-        /* 패딩 */
         memset(row_dst + row_stride, 0, pad);
     }
 
@@ -159,6 +173,11 @@ static uint8_t *fb_to_bmp(int w, int h, int bpp, size_t *out_size) {
     *out_size = total;
     return buf;
 }
+
+/* ------------------------------------------------------------------ */
+/* 동시 변환 방지 뮤텍스 (보드 OOM 방지)                                */
+/* ------------------------------------------------------------------ */
+static pthread_mutex_t g_fb_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* ------------------------------------------------------------------ */
 /* HTTP 핸들러                                                          */
@@ -174,24 +193,32 @@ static const char HTML[] =
     "justify-content:center;min-height:100vh;font-family:monospace}"
     "img{max-width:100%;max-height:90vh;border:1px solid #444}"
     "#info{margin:6px;font-size:13px}</style></head><body>"
-    "<img id='fb' src='/frame'>"
+    "<img id='fb'>"
     "<div id='info'>connecting...</div>"
     "<script>"
     "var img=document.getElementById('fb');"
     "var info=document.getElementById('info');"
+    "var prevURL=null;"
     "function refresh(){"
-    "var t0=performance.now();"
-    "var tmp=new Image();"
-    "tmp.onload=function(){"
-    "img.src=tmp.src;"
-    "var ms=Math.round(performance.now()-t0);"
-    "info.textContent=new Date().toLocaleTimeString()+'  |  '+ms+' ms';"
-    "setTimeout(refresh,300)};"
-    "tmp.onerror=function(){"
-    "info.textContent='error - retrying...';"
-    "setTimeout(refresh,2000)};"
-    "tmp.src='/frame?'+Date.now()}"
-    "setTimeout(refresh,300);"
+      "var t0=performance.now();"
+      "fetch('/frame').then(function(r){"
+        "if(!r.ok)throw new Error(r.status);"
+        "return r.blob();"
+      "}).then(function(blob){"
+        "var url=URL.createObjectURL(blob);"
+        "img.src=url;"
+        "if(prevURL)URL.revokeObjectURL(prevURL);"
+        "prevURL=url;"
+        "var ms=Math.round(performance.now()-t0);"
+        "var kb=Math.round(blob.size/1024);"
+        "info.textContent=new Date().toLocaleTimeString()+'  |  '+ms+' ms  |  '+kb+' KB';"
+        "setTimeout(refresh,1000);"
+      "}).catch(function(){"
+        "info.textContent='error - retrying...';"
+        "setTimeout(refresh,3000);"
+      "});"
+    "}"
+    "refresh();"
     "</script></body></html>\r\n";
 
 static void handle_client(int csock) {
@@ -213,11 +240,14 @@ static void handle_client(int csock) {
                             "Connection: close\r\n\r\nFB error";
             send(csock, e, strlen(e), 0);
         } else {
+            /* 한 번에 하나씩만 변환 (보드 OOM 방지) */
+            pthread_mutex_lock(&g_fb_mutex);
             size_t bmp_size = 0;
             uint8_t *bmp = fb_to_bmp(w, h, bpp, &bmp_size);
+            pthread_mutex_unlock(&g_fb_mutex);
             if (!bmp) {
-                const char *e = "HTTP/1.1 500 Internal Server Error\r\n"
-                                "Connection: close\r\n\r\nalloc error";
+                const char *e = "HTTP/1.1 503 Service Unavailable\r\n"
+                                "Connection: close\r\n\r\nbusy";
                 send(csock, e, strlen(e), 0);
             } else {
                 char hdr[256];
