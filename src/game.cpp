@@ -1581,6 +1581,8 @@ input_phase:
                             }
                         } catch (...) {}
                     }
+                } else if (kind == "CLEAR") {
+                    display->drawRect(canvasX, canvasY, canvasW, canvasH, Display::COLOR_BLACK);
                 } else if (kind == "A_POINT") {
                     std::stringstream parse(value);
                     std::string pnStr, nxStr, nyStr;
