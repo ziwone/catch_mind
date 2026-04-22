@@ -18,6 +18,7 @@
 - 출제자를 선택한 보드가 `ROLE|DRAWER` 브로드캐스트
 - 나머지 두 보드는 `STATUS|CHALLENGER_JOIN` 전송 → P1/P2 슬롯 자동 배정
   - 슬롯 배정: 보드 번호와 출제자 번호 조합으로 결정 (`getChallengerSlotByDrawer`)
+- **자동 출제자 배정**: 두 보드가 먼저 도전자를 선택(`CHALLENGER_JOIN` 2회 수신)하면, 나머지 보드가 자동으로 출제자가 됨 → 세 명 모두 도전자를 선택하는 상황 방지
 - 직전 라운드 정답자가 있으면 자동으로 다음 라운드 출제자로 배정
 
 ### 2. 카테고리 / 주제어 선택 (출제자만)
@@ -100,28 +101,62 @@
 ## 네트워크 프로토콜
 
 ### 전송 방식
-- UDP 브로드캐스트, 포트 `37031`
-- 메시지 형식: `CM|<nodeId>|<kind>|<value>`
-- 중요 메시지는 3회 재전송 (150ms 간격)
+- 소켓: `SOCK_DGRAM` + `SO_BROADCAST` + `SO_REUSEADDR`, 포트 `37031`
+- 메시지 형식: `CM|<nodeId>|<kind>|<value>` (`|` 구분자, `std::getline` 파싱)
+- 발신자 IP: `recvfrom()`의 `sockaddr_in`에서 추출 → 슬롯 배정에 활용
+- 자기 메시지 필터: `senderNodeId == nodeId` 조건으로 즉시 무시
+- IP 감지: `getifaddrs()` + `AF_INET` 루프백(`127.x.x.x`) 제외로 보드 IP 자동 획득
+- I/O 다중화: `select()` 기반 논블로킹 (타임아웃 5ms~200ms 상황별 조정)
+
+### 재전송 횟수 (충돌/누락 대응)
+| 메시지 | 재전송 횟수 | 간격 | 이유 |
+|--------|------------|------|------|
+| `DRAW` | 1회 | — | 실시간성 우선, 누락 허용 |
+| `CLEAR`, `ROLE\|DRAWER`, `JUDGING_*` | 3회 | 50ms | 상태 동기화 |
+| `ANSWER`, `A_CLEAR`, `RETRY_P{N}` | 3회 | 30ms | 판정 신뢰성 |
+| `DRAWING_START` | 4회 | 150ms | 라운드 시작 싱크 배리어 |
+| `FINAL_SCORE_SYNC` | 5회 | 20ms | 최종 점수 일관성 보장 |
+
+### 충돌 방지 메커니즘
+| 상황 | 방어 로직 |
+|------|----------|
+| 판정 중 중복 제출 | `judgingActive` 플래그: 출제자가 이미 판정 중이면 추가 ANSWER 무시 |
+| 도전자 이중 제출 | `submitLocked`: `JUDGING_ACTIVE` 수신 시 SUBMIT 버튼 잠금, `JUDGING_END` 후 해제 |
+| 도전자 메시지 위장 | `fromDrawer` 체크: DRAW/CLEAR/STATUS는 `currentDrawerNodeId` 소유자만 처리 |
+| 자기 메시지 루프백 | `senderNodeId == nodeId` 즉시 무시 |
+| 라운드 전환 중 잔류 패킷 | `ROUND_END` 수신 즉시 함수 `return`, 이후 패킷은 다음 라운드에서 무시 |
+| 터치 이벤트 잔류 | 화면 전환 시 `read()` 루프로 버퍼 완전 소진 |
+
+### 동기화 배리어
+- **라운드 시작**: `DRAWING_START` × 4 → `waitForGameReady()` 최대 4초 대기
+- **최종 점수**: `FINAL_SCORE_SUBMIT` 반복 전송 → PLAYER1이 집계 후 `FINAL_SCORE_SYNC` 스냅샷 브로드캐스트 → `FINAL_READY` 배리어로 3보드 동시 결과 화면 진입
 
 ### 주요 메시지 목록
-| kind | value | 방향 | 설명 |
-|------|-------|------|------|
-| `ROLE` | `DRAWER` | 출제자 → 전체 | 출제자 선택 알림 |
-| `STATUS` | `CHALLENGER_JOIN` | 도전자 → 전체 | 도전자 참가 및 슬롯 협상 |
-| `STATUS` | `DRAWING_START` | 출제자 → 전체 | 라운드 시작 신호 (4회) |
-| `STATUS` | `GAME_READY` | 출제자 → 전체 | 출제자 라운드 화면 진입 완료 |
-| `STATUS` | `DRAWING_ACTIVE` | 출제자 → 전체 | 첫 스트로크 시작 알림 |
-| `DRAW` | `x,y` / `UP` | 출제자 → 전체 | 드로잉 좌표 스트림 |
-| `CLEAR` | — | 출제자 → 전체 | 캔버스 초기화 |
-| `STATUS` | `HINT#{카테고리}` | 출제자 → 전체 | 30초 힌트 |
-| `STATUS` | `A_CLEAR_P{N}` | 출제자 → 전체 | P{N} 답변 패널 초기화 |
-| `STATUS` | `RETRY_P{N}` | 출제자 → 전체 | P{N} 재도전 요청 |
-| `STATUS` | `CORRECT_P{N}` | 출제자 → 전체 | P{N} 정답 판정 |
-| `STATUS` | `WRONG_ALL#{정답}` | 출제자 → 전체 | 시간 초과, 정답 공개 |
-| `STATUS` | `GAME_OVER` | 출제자 → 전체 | 전체 라운드 종료 |
-| `FINAL_SCORE_SUBMIT` | `P1:n,P2:n,P3:n` | 각 보드 → 전체 | 최종 점수 제출 |
-| `A_DRAW` | `pn,x,y` / `pn,UP` | 도전자 → 전체 | 도전자 답변 입력 스트림 |
+| kind | value | 방향 | 재전송 | 설명 |
+|------|-------|------|--------|------|
+| `ROLE` | `DRAWER` | 출제자 → 전체 | 3회/50ms | 출제자 선택 알림 |
+| `STATUS` | `CHALLENGER_JOIN` | 도전자 → 전체 | 1회 | 도전자 참가 및 슬롯 협상 |
+| `STATUS` | `DRAWING_START` | 출제자 → 전체 | 4회/150ms | 라운드 시작 싱크 신호 |
+| `STATUS` | `GAME_READY` | 출제자 → 전체 | 1회 | 출제자 라운드 화면 진입 완료 |
+| `STATUS` | `DRAWING_ACTIVE` | 출제자 → 전체 | 1회 | 첫 스트로크 시작 알림 |
+| `DRAW` | `nx,ny,color` | 출제자 → 전체 | 1회 | 드로잉 좌표 (0~999 정규화) |
+| `CLEAR` | `1` | 출제자 → 전체 | 3회/50ms | 캔버스 초기화 |
+| `STATUS` | `HINT#{카테고리}` | 출제자 → 전체 | 1회 | 30초 힌트 |
+| `STATUS` | `JUDGING_ACTIVE` | 출제자 → 전체 | 3회/50ms | 판정 시작, 도전자 submit 잠금 |
+| `STATUS` | `JUDGING_END` | 출제자 → 전체 | 3회/50ms | 판정 종료, 잠금 해제 |
+| `STATUS` | `A_CLEAR_P{N}` | 출제자 → 전체 | 3회/30ms | P{N} 답변 패널 초기화 |
+| `STATUS` | `RETRY_P{N}` | 출제자 → 전체 | 3회/30ms | P{N} 재도전 요청 |
+| `STATUS` | `CORRECT_P{N}#BOARD{B}#EARLY/LATE` | 출제자 → 전체 | 1회 | 정답 판정 (보드번호, 타이밍 포함) |
+| `STATUS` | `WRONG_ALL#{정답}` | 출제자 → 전체 | 1회 | 시간 초과, 정답 공개 |
+| `STATUS` | `ROUND_END` | 출제자 → 전체 | 1회 | 라운드 종료 |
+| `STATUS` | `GAME_OVER` | 출제자 → 전체 | 1회 | 전체 라운드 종료 |
+| `ANSWER` | `{pn}:DRAWN` | 도전자 → 전체 | 3회/30ms | 답변 제출 |
+| `A_POINT` | `{pn},nx,ny` | 도전자 → 전체 | 1회 | 답변 필기 좌표 (submit 시 일괄 전송) |
+| `A_CLEAR` | `{pn}` | 도전자 → 전체 | 1회 | 도전자 자신의 답변 지우기 |
+| `A_UP` | `{pn}` | 도전자 → 전체 | 1회 | 필기 스트로크 끝 |
+| `FINAL_SCORE_SUBMIT` | `{nodeId}:{score}` | 각 보드 → 전체 | 400ms마다 반복 | 최종 점수 제출 |
+| `FINAL_SCORE_SYNC` | `PLAYER1:n,PLAYER2:n,...` | PLAYER1 → 전체 | 5회/20ms | 전체 점수 스냅샷 |
+| `FINAL_READY` | `1` | 각 보드 → 전체 | 800ms마다 반복 | 결과 화면 배리어 |
 
 ---
 
@@ -149,82 +184,166 @@ bgm/              배경음악 파일
 
 ## 사용 기술 정리
 
-### 언어 및 표준
+### 언어 및 빌드
 | 항목 | 내용 |
 |------|------|
-| 언어 | C++17, C (fb_server) |
-| 빌드 | aarch64-linux-gnu-g++ (크로스컴파일), Makefile |
-| 타깃 플랫폼 | Linux aarch64 (Cortex-A 계열 SBC) |
+| 언어 | C++17 (`game.cpp`, `display.cpp`, `bgm.cpp`), C (`fb_server.c`) |
+| 빌드 | `aarch64-linux-gnu-g++` 크로스컴파일, `Makefile` |
+| 타깃 | Linux aarch64 (Cortex-A 계열 SBC) |
+| 배포 경로 | VirtualBox 공유폴더(`/media/sf_share/catch_mind`) → `rsync` → NFS export(`/nfsroot`) → 보드 NFS 마운트(`/mnt/nfs`) |
 
-### 디스플레이
-| 항목 | 내용 |
-|------|------|
-| 출력 장치 | Linux Framebuffer (`/dev/fb0`) |
-| API | `ioctl(FBIOGET_VSCREENINFO)`, `mmap` |
-| 더블 버퍼링 | 소프트웨어 섀도우 버퍼 + `memcpy` 플립 |
-| 폰트 렌더링 | 5×7 비트맵 폰트 직접 구현 (외부 라이브러리 없음) |
-| 이미지 로딩 | PPM(P6) 바이너리 포맷 파싱 (직접 구현) |
-| VSync | `FBIO_WAITFORVSYNC` ioctl |
-| 커서 숨기기 | `/dev/tty` `KDSETMODE KD_GRAPHICS` |
+---
 
-### 터치 입력
-| 항목 | 내용 |
-|------|------|
-| 입력 장치 | Linux Input Subsystem (`/dev/input/event*`) |
-| 이벤트 타입 | `ABS_MT_POSITION_X/Y`, `BTN_TOUCH`, `SYN_REPORT` |
-| 헤더 | `<linux/input.h>` |
-| 좌표 보정 | Raw ADC 값 → 화면 픽셀 좌표 선형 매핑 |
-| 버퍼 드레인 | 화면 전환 시 `read()` 루프로 이벤트 버퍼 소진 → ghost click 방지 |
+### 디스플레이 (`display.cpp`)
 
-### 네트워크
-| 항목 | 내용 |
-|------|------|
-| 프로토콜 | UDP 소켓, 브로드캐스트 (`SO_BROADCAST`) |
-| 포트 | 37031 |
-| 다중화 | `select()` 기반 논블로킹 I/O |
-| IP 감지 | `getifaddrs()` + `AF_INET` 루프백 제외 |
-| 재전송 | 중요 메시지 3~4회 반복 (150ms 간격) |
-| 동기화 배리어 | `DRAWING_START` × 4 + `waitForGameReady()` |
+#### 초기화 흐름
+1. `/dev/fb0` `O_RDWR` 열기
+2. `ioctl(FBIOGET_VSCREENINFO)` → 해상도(`xres`/`yres`), bpp 획득
+3. `ioctl(FBIOGET_FSCREENINFO)` → `line_length`, `smem_len` 획득
+4. 하드웨어 더블버퍼 시도: `yres_virtual = yres*2`로 `FBIOPUT_VSCREENINFO` → 성공 시 페이지 플립 모드
+5. 실패 시 소프트웨어 섀도우 버퍼(`malloc(pageSizeBytes)`) 사용
+6. `mmap(PROT_READ|PROT_WRITE, MAP_SHARED)` 으로 프레임버퍼 메모리 직접 매핑
+7. `/dev/tty0` 열고 `ioctl(KDSETMODE, KD_GRAPHICS)` + ANSI `\033[?25l` → 커서 완전 숨김
+
+#### 더블 버퍼링 동작
+- **하드웨어 페이지 플립**: `beginFrame()` 시 backPage를 frontPage에서 복사, `endFrame()` 시 `FBIO_WAITFORVSYNC` 후 `FBIOPAN_DISPLAY`로 yoffset 전환 → 찢김 없는 플리핑
+- **소프트웨어 섀도우**: `beginFrame()` 시 `memcpy(shadow ← map)`, `endFrame()` 시 `memcpy(map ← shadow)` → 원자적 화면 갱신
+- **프레임 밖 직접 드로잉**: `beginFrame()` 없이 `drawRect()` 호출 시 frontPage/backPage **양쪽**에 동시 기록 → 잔상 없이 즉시 반영
+
+#### 픽셀 포맷 지원
+- `bpp=32`: ARGB8888 직접 쓰기 (`*(uint32_t*) = color`)
+- `bpp=16`: RGB565 변환 후 `*(uint16_t*)` 쓰기
+
+#### 폰트 렌더링
+- 5×7 비트맵 폰트 하드코딩 (A-Z, 0-9, `.:- /` 등)
+- `scale` 파라미터로 정수 배율 확대
+- 한글 불가 → 모든 UI 레이블은 ASCII
+
+#### 이미지 로딩
+- PPM P6 (바이너리) 포맷 직접 파싱
+- 헤더(`P6\n width height\n maxval\n`) 읽은 후 RGB 픽셀 배열 → 화면 bpp에 맞게 변환 후 `drawRect`
+- 파일 없으면 fallback: `/mnt/nfs/img/character.ppm`
+
+---
+
+### 터치 입력 (`game.cpp`)
+
+#### 디바이스 탐색
+- `/dev/input/event0` ~ `event15` 순서로 `O_RDONLY | O_NONBLOCK` 시도
+- `ioctl(EVIOCGBIT)` 으로 `EV_ABS` 지원 확인 → 첫 번째 성공 디바이스 사용
+
+#### 이벤트 처리
+- `EV_ABS` + `ABS_X` / `ABS_MT_POSITION_X` → `touchRawX` 업데이트
+- `EV_ABS` + `ABS_Y` / `ABS_MT_POSITION_Y` → `touchRawY` 업데이트
+- `EV_ABS` + `ABS_MT_TRACKING_ID < 0` → 멀티터치 손 뗌 감지
+- `EV_KEY` + `BTN_TOUCH value==0` → 싱글터치 손 뗌 감지 (두 경로 모두 처리)
+- `EV_SYN` + `SYN_REPORT` → 좌표 확정 후 처리 (드로잉 중)
+
+#### 좌표 보정
+```
+sx = (touchRawX - rawMinX) * screenW / (rawMaxX - rawMinX)
+sy = (touchRawY - rawMinY) * screenH / (rawMaxY - rawMinY)
+```
+보정 상수는 보드별로 `mapTouchToScreen()` 내에 하드코딩
+
+#### 디바운싱
+- 릴리즈 중복 방지: 120ms 이내 + 6px 이내 재발생 릴리즈 무시 (`lastTapTime`/`lastTapX/Y`)
+- 화면 전환 시 버퍼 드레인: `while(read(touchFd, &tmp, sizeof(tmp)) == sizeof(tmp)) {}` → ghost click 방지
+- 스트로크 재연결 브리지: 손 뗐다가 120ms/48px 이내 재터치 시 끊긴 획 보간 연결
+
+#### 드로잉 패킷 전송 방식
+- 출제자: 터치 포인트마다 즉시 `broadcastDrawPoint()` → `DRAW|nx,ny,color` (0~999 정규화)
+- 도전자: 포인트를 `queuedInkPoints` 벡터에 로컬 누적 → SUBMIT 시 `flushQueuedInk()`로 `A_POINT` 패킷 일괄 전송
+
+---
+
+### 물리 버튼 GPIO (`game.cpp`)
+
+#### 초기화
+- `/dev/gpiochip0`, `/dev/gpiochip1` 순서로 시도
+- `ioctl(GPIO_GET_LINEEVENT_IOCTL, &gpioevent_request)` 로 이벤트 fd 획득
+  - `handleflags = GPIOHANDLE_REQUEST_INPUT`
+  - `eventflags = GPIOEVENT_REQUEST_FALLING_EDGE` (버튼 누름 = 하강 에지)
+- 커널 ≥ 4.8, `CONFIG_GPIO_CDEV=y` 필요
+
+#### 감지 루프
+- 버튼 fd마다 백그라운드 `std::thread` 생성 (`gpioWatchThread`)
+- 스레드 내부: `poll(POLLIN, 100ms)` → `gpioevent_data` 읽기 → `std::atomic<bool>` 플래그 `store(true)`
+- 메인 루프에서 `flag.exchange(false)` 로 원자적 소비
+
+#### 역할별 버튼 배정
+| 버튼 | GPIO line | 출제자 | 도전자 |
+|------|-----------|--------|--------|
+| SW2 | line 17 | OK (정답) | CLEAR (지우기) |
+| SW3 | line 18 | NG (오답) | SUBMIT (제출) |
+
+#### 생명주기 관리
+- RAII 구조체 `ChlGpioScope` (도전자) / 직접 `btnRunning` + `join` (출제자)
+- 라운드 종료 시 `running.store(false)` → 스레드 자연 종료 → `join()` → `close(fd)`
+
+---
+
+### 오디오 (`bgm.cpp`)
+
+#### 재생 방식
+- `fork()` + `execl("/bin/sh", "sh", "-c", cmd)` → `/mnt/nfs/aplay` 실행
+- ALSA 환경 초기화: `alsa.sh` 스크립트를 소싱(`. /mnt/nfs/alsa.sh`)한 후 실행
+- 오디오 디바이스: `hw:<card>,0` (카드 번호는 런타임 결정)
+- 카드 번호: `/mnt/nfs/alsa_card` 파일 읽기 → 없으면 기본값 0
+
+#### 두 가지 재생 모드
+| 함수 | 특성 | 용도 |
+|------|------|------|
+| `playOnce(path)` | 비차단 (`WNOHANG`), 자식 프로세스 방치 | 효과음 (정답/오답) |
+| `play(path)` | 별도 스레드에서 `waitpid()` 대기 후 완료되면 루프 재시작 | BGM 반복 재생 |
+
+#### 정지
+- `stop()`: `childPid`에 `SIGTERM` 전송 + `running = false` + 스레드 `join()`
+
+#### 볼륨 제어
+- `fork()` + `execl("/bin/sh", "-c", "amixer -c <card> cset numid=1 <pct>%")`
+- `waitpid()` 동기 대기 (볼륨은 블로킹 허용)
+
+---
+
+### FB 모니터 서버 (`fb_server.c`)
+
+#### 개요
+- 순수 C (libc + pthreads), 외부 라이브러리 없음
+- TCP 포트 8080, `accept()` 마다 `pthread_create()` + `pthread_detach()`
+
+#### HTTP 엔드포인트
+| 경로 | 응답 | 설명 |
+|------|------|------|
+| `GET /` | HTML + JavaScript | 1초 간격 자동 갱신 페이지 |
+| `GET /frame` | `image/bmp` | 현재 프레임버퍼 캡처 이미지 |
+
+#### 캡처 파이프라인
+1. `/sys/class/graphics/fb0/virtual_size`, `bits_per_pixel` 읽기 (sysfs)
+2. `/dev/fb0` `read()` → 원본 프레임버퍼 메모리 읽기
+3. 2×2 블록 평균 다운스케일 (`FB_SCALE=2`) → 전송 데이터 1/4 감소
+4. RGB16/RGB32 → BGR24 변환 후 BMP 헤더 조립 (`BmpFileHeader` + `BmpDibHeader`, `#pragma pack(push,1)`)
+5. HTTP 응답 헤더 + BMP 바이너리 전송
+
+#### OOM 방지
+- `pthread_mutex_t g_fb_mutex`: 동시 변환 1개로 제한 → 보드 메모리 부족 방지
+
+---
 
 ### 멀티스레딩
-| 항목 | 내용 |
-|------|------|
-| 라이브러리 | POSIX Threads (`pthread`) / C++ `std::thread` |
-| 용도 | FB 모니터 HTTP 서버, GPIO 버튼 감시 스레드를 백그라운드로 분리 |
-| 생명주기 관리 | RAII 구조체로 스레드/fd 자동 해제 (`std::atomic<bool>` running 플래그 + `join()` + `close()`) |
+| 스레드 | 생성 위치 | 역할 | 종료 방법 |
+|--------|----------|------|----------|
+| `gpioWatchThread` × 2 | 라운드 진입 시 | GPIO 버튼 감시 | `running.store(false)` + `join()` |
+| `BgmPlayer::threadFunc` | `play()` 호출 시 | BGM 반복 재생 | `running = false` + `SIGTERM` + `join()` |
+| `fb_server_run` | 게임 시작 시 | HTTP 모니터 서버 | 프로세스 종료까지 상시 실행 |
+| HTTP 요청 핸들러 | 연결마다 | BMP 캡처/전송 | 요청 처리 후 자동 종료 (`detach`) |
 
-### 물리 버튼 (GPIO)
-| 항목 | 내용 |
-|------|------|
-| 버튼 | SW2 (정답 OK), SW3 (오답 NG) |
-| GPIO 라인 | line 17 (SW2), line 18 (SW3) |
-| 인터페이스 | Linux GPIO character device API (`/dev/gpiochip0`) |
-| 커널 요구사항 | kernel ≥ 4.8, `CONFIG_GPIO_CDEV=y` |
-| ioctl | `GPIO_GET_LINEEVENT_IOCTL` (`gpioevent_request`) |
-| 트리거 | `GPIOEVENT_REQUEST_FALLING_EDGE` (버튼 누름 하강 에지) |
-| 감지 방식 | `poll(POLLIN)` + 백그라운드 `std::thread` |
-| 플래그 공유 | `std::atomic<bool>` (스레드 ↔ 메인 루프) |
-| 헤더 | `<linux/gpio.h>`, `<poll.h>` |
-| 사용 시점 | **출제자**: 도전자 답변 수신 후 판정 대기 중 (SW2=OK, SW3=NG) / **도전자**: 답변 입력 중 (SW2=CLEAR, SW3=SUBMIT) |
-
-### 오디오
-| 항목 | 내용 |
-|------|------|
-| 재생 방식 | `fork` + `execl`로 `aplay` 프로세스 실행 |
-| 볼륨 제어 | `amixer cset numid=1` |
-| 카드 선택 | `/mnt/nfs/alsa_card` 파일로 런타임 설정 |
-| 포맷 | WAV (PCM) |
+---
 
 ### 시간 처리
 | 항목 | 내용 |
 |------|------|
-| 타이머 | `std::chrono::steady_clock` |
-| 대기 | `usleep`, `select` 타임아웃 |
-
-### FB 모니터 서버
-| 항목 | 내용 |
-|------|------|
-| 구현 | C 단일 파일 (`fb_server.c`) |
-| 기능 | `/dev/fb0`를 PPM으로 캡처 → HTTP GET으로 브라우저 전송 |
-| 포트 | 8080 |
-| 용도 | 보드 화면 원격 확인 (개발/디버깅) |
+| 타이머 | `std::chrono::steady_clock::now()` + `duration_cast<seconds/milliseconds>` |
+| 논블로킹 대기 | `select()` 타임아웃 (5~200ms) |
+| 차단 대기 | `usleep()` — 전환 화면(`showCorrectScreen` 3초 등) 중 사용, 이 시간 동안 UDP 수신 불가 |
+| 캐릭터 표정 복귀 | `moodCryUntil = now() + 3s` → 매 루프에서 `now() >= moodCryUntil` 확인 |
