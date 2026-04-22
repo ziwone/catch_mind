@@ -240,7 +240,7 @@ void CatchMindGame::drawGameLayout() {
     const int infoPanelW = 150;
     const int padding = 8;
 
-    int topRatioPct = isDrawerRole ? 70 : 56;
+    int topRatioPct = 65;
     topH = (screenH * topRatioPct) / 100;
     topH = std::max(140, std::min(screenH - 90, topH));
     bottomY = topH + TIMER_BAR_H;
@@ -262,6 +262,17 @@ void CatchMindGame::drawGameLayout() {
     std::string brdLabel = "BRD" + std::to_string(myBoardNum);
     display->drawText(infoPanelW - 32, 8, brdLabel.c_str(), ui::ACCENT, 1);
 
+    // 캐릭터를 배경 직후 먼저 그림 (endFrame 직전에 그리면 순간 빈 화면에만 캐릭터 보임)
+    {
+        int charSz = std::min(80, topH - 50);
+        if (charSz >= 20) {
+            int cix = (infoPanelW - charSz) / 2;
+            int ciy = topH - charSz - 4;
+            std::string cpath = "/mnt/nfs/img/player" + std::to_string(myBoardNum) + "/normal.ppm";
+            if (!display->drawPNG(cpath, cix, ciy, charSz, charSz))
+                display->drawPNG("/mnt/nfs/img/character.ppm", cix, ciy, charSz, charSz);
+        }
+    }
 
     unsigned int canvasAccent = isDrawerRole ? ui::ACCENT_WARM : ui::ACCENT;
     drawPanelCard(display, canvasX - 8, canvasY - 8, canvasW + 16, canvasH + 16,
@@ -293,16 +304,6 @@ void CatchMindGame::drawGameLayout() {
 
     display->drawText(10, bottomY + 8, "P1", ui::TEXT_MAIN, 2);
     display->drawText(halfW + 10, bottomY + 8, "P2", ui::TEXT_MAIN, 2);
-
-
-    int charSz = std::min(80, topH - 50);
-    if (charSz >= 20) {
-        int cix = (infoPanelW - charSz) / 2;
-        int ciy = topH - charSz - 4;
-        std::string cpath = "/mnt/nfs/img/player" + std::to_string(myBoardNum) + "/normal.ppm";
-        if (!display->drawPNG(cpath, cix, ciy, charSz, charSz))
-            display->drawPNG("/mnt/nfs/img/character.ppm", cix, ciy, charSz, charSz);
-    }
 
     drawStatus();
     display->endFrame();
@@ -827,16 +828,17 @@ void CatchMindGame::runChallengerLiveRound() {
     const int myPanelW = (myPlayerNumber == 1) ? halfW : (screenW - halfW);
     const int btnW = 130;
     const int btnH = 48;
-    const int btnX = myPanelX + myPanelW - btnW - 8;
+    const int btnGap = 12;
     const int btnY = bottomY + panelH - btnH - 8;
-    const int clearW = 98;
-    const int clearH = 40;
-    const int clearX = btnX - clearW - 20;  // gap 10→20
-    const int clearY = btnY + (btnH - clearH) / 2;
-    const int writeX = myPanelX + 8;
-    const int writeY = bottomY + 24;
-    const int writeW = myPanelW - 16;
-    const int writeH = std::max(40, btnY - writeY - 8);  // 하한 30→40, 여백 6→8
+    const int clearW = btnW;
+    const int clearH = btnH;
+    const int clearX = myPanelX + (myPanelW - (btnW * 2 + btnGap)) / 2;
+    const int clearY = btnY;
+    const int btnX = clearX + clearW + btnGap;
+    const int writeX = myPanelX + 4;
+    const int writeY = bottomY + 4;
+    const int writeW = myPanelW - 8;
+    const int writeH = std::max(40, btnY - writeY - 4);
     const int writeMax = 999;
 
     bool answerInkWritten = false;
@@ -909,9 +911,9 @@ void CatchMindGame::runChallengerLiveRound() {
         int panelX = (slot == 1) ? 0 : hw;
         int panelW = (slot == 1) ? hw : (screenW - hw);
         int areaX = panelX + 8;
-        int areaY = bottomY + 24;
+        int areaY = bottomY + 4;
         int areaW = std::max(10, panelW - 16);
-        int areaH = std::max(10, panelH - 24 - 40);
+        int areaH = std::max(10, panelH - 4 - 48 - 8 - 4);
         int sx = areaX + (nx * std::max(1, areaW - 1)) / 999;
         int sy = areaY + (ny * std::max(1, areaH - 1)) / 999;
         if (!otherStrokeActive) {
@@ -938,9 +940,9 @@ void CatchMindGame::runChallengerLiveRound() {
         int panelX = (slot == 1) ? 0 : hw;
         int panelW = (slot == 1) ? hw : (screenW - hw);
         int areaX = panelX + 8;
-        int areaY = bottomY + 24;
+        int areaY = bottomY + 4;
         int areaW = std::max(10, panelW - 16);
-        int areaH = std::max(10, panelH - 24 - 40);
+        int areaH = std::max(10, panelH - 4 - 48 - 8 - 4);
         drawPanelCard(display, areaX, areaY, areaW, areaH, ui::STROKE, ui::CARD, 0x0b151f);
         if (slot == myPlayerNumber) {
             display->drawText(areaX + 6, areaY + 6, "TOUCH WRITE", ui::TEXT_DIM, 1);
@@ -951,43 +953,44 @@ void CatchMindGame::runChallengerLiveRound() {
         paintAnswerPanel(1, 0x102336);
         paintAnswerPanel(2, 0x2a1b21);
 
-        if (myPlayerNumber == 1) {
-            display->drawRect(0, bottomY, halfW, panelH, ui::ACCENT_WARM);
-        } else {
-            display->drawRect(halfW, bottomY, screenW - halfW, panelH, ui::ACCENT_WARM);
+        {
+            int myPx = (myPlayerNumber == 1) ? 0 : halfW;
+            int myPw = (myPlayerNumber == 1) ? halfW : (screenW - halfW);
+            for (int t = 0; t < 2; ++t) {
+                display->drawRect(myPx - t,         bottomY - t,     myPw + t*2, 1,           ui::ACCENT_WARM);
+                display->drawRect(myPx - t,         bottomY - t,     1,          panelH + t*2, ui::ACCENT_WARM);
+                display->drawRect(myPx - t,         bottomY + panelH + t - 1, myPw + t*2, 1,  ui::ACCENT_WARM);
+                display->drawRect(myPx + myPw + t - 1, bottomY - t,  1,          panelH + t*2, ui::ACCENT_WARM);
+            }
         }
 
         if (myPlayerNumber == 1) {
-            display->drawText(8, bottomY + 26, "ME:", ui::TEXT_MAIN, 1);
-            display->drawText(40, bottomY + 26, "WRITE HERE", ui::ACCENT_WARM, 1);
-            display->drawText(halfW + 8, bottomY + 26,
+            display->drawText(halfW + 8, bottomY + 6,
                               receivedAnswer2.empty() ? "P2: waiting..." : ("P2: " + receivedAnswer2).substr(0, 16),
-                              ui::TEXT_MAIN, 1);
+                              ui::TEXT_DIM, 1);
         } else {
-            display->drawText(halfW + 8, bottomY + 26, "ME:", ui::TEXT_MAIN, 1);
-            display->drawText(halfW + 40, bottomY + 26, "WRITE HERE", ui::ACCENT_WARM, 1);
-            display->drawText(8, bottomY + 26,
+            display->drawText(8, bottomY + 6,
                               receivedAnswer1.empty() ? "P1: waiting..." : ("P1: " + receivedAnswer1).substr(0, 16),
-                              ui::TEXT_MAIN, 1);
+                              ui::TEXT_DIM, 1);
         }
 
         drawPanelCard(display, writeX, writeY, writeW, writeH, ui::STROKE, ui::CARD, 0x0b151f);
         display->drawText(writeX + 6, writeY + 6, "TOUCH WRITE", ui::TEXT_DIM, 1);
 
         drawPanelCard(display, clearX, clearY, clearW, clearH, ui::ACCENT_WARM, 0x533611, 0x3c280f);
-        drawTextCentered(display, clearX + clearW / 2, clearY + 13, "CLEAR", ui::ACCENT_WARM, 1);
+        drawTextCentered(display, clearX + clearW / 2, clearY + btnH / 2 - 8, "CLEAR", ui::ACCENT_WARM, 1);
 
         unsigned int submitColor = submitLocked ? 0x3a3f44 : (answerInkWritten ? 0x1f5c3b : 0x30483a);
         unsigned int submitEdge = submitLocked ? ui::TEXT_DIM : ui::OK;
         drawPanelCard(display, btnX, btnY, btnW, btnH, submitEdge, submitColor, submitColor);
-        drawTextCentered(display, btnX + btnW / 2, btnY + 16, "SUBMIT", submitEdge, 1);
+        drawTextCentered(display, btnX + btnW / 2, btnY + btnH / 2 - 8, "SUBMIT", submitEdge, 1);
     };
 
     auto redrawSubmitOnly = [&]() {
         unsigned int submitColor = submitLocked ? 0x3a3f44 : (answerInkWritten ? 0x1f5c3b : 0x30483a);
         unsigned int submitEdge = submitLocked ? ui::TEXT_DIM : ui::OK;
         drawPanelCard(display, btnX, btnY, btnW, btnH, submitEdge, submitColor, submitColor);
-        drawTextCentered(display, btnX + btnW / 2, btnY + 16, "SUBMIT", submitEdge, 1);
+        drawTextCentered(display, btnX + btnW / 2, btnY + btnH / 2 - 8, "SUBMIT", submitEdge, 1);
     };
 
 
@@ -997,16 +1000,18 @@ void CatchMindGame::runChallengerLiveRound() {
 
         int myPx = (myPlayerNumber == 1) ? 0 : halfW;
         int myPw = (myPlayerNumber == 1) ? halfW : (screenW - halfW);
-        display->drawRect(myPx, bottomY, myPw, panelH, ui::ACCENT_WARM);
-        int lbX = myPx + 8;
-        display->drawText(lbX,      bottomY + 26, "ME:",        ui::TEXT_MAIN,    1);
-        display->drawText(lbX + 32, bottomY + 26, "WRITE HERE", ui::ACCENT_WARM,  1);
+        for (int t = 0; t < 2; ++t) {
+            display->drawRect(myPx - t,         bottomY - t,     myPw + t*2, 1,           ui::ACCENT_WARM);
+            display->drawRect(myPx - t,         bottomY - t,     1,          panelH + t*2, ui::ACCENT_WARM);
+            display->drawRect(myPx - t,         bottomY + panelH + t - 1, myPw + t*2, 1,  ui::ACCENT_WARM);
+            display->drawRect(myPx + myPw + t - 1, bottomY - t,  1,          panelH + t*2, ui::ACCENT_WARM);
+        }
 
         drawPanelCard(display, writeX, writeY, writeW, writeH, ui::STROKE, ui::CARD, 0x0b151f);
         display->drawText(writeX + 6, writeY + 6, "TOUCH WRITE", ui::TEXT_DIM, 1);
 
         drawPanelCard(display, clearX, clearY, clearW, clearH, ui::ACCENT_WARM, 0x533611, 0x3c280f);
-        drawTextCentered(display, clearX + clearW / 2, clearY + 13, "CLEAR", ui::ACCENT_WARM, 1);
+        drawTextCentered(display, clearX + clearW / 2, clearY + btnH / 2 - 8, "CLEAR", ui::ACCENT_WARM, 1);
 
         redrawSubmitOnly();
     };
@@ -1145,7 +1150,7 @@ input_phase:
                             unsigned int color = (unsigned int)std::stoul(colorStr, nullptr, 16);
                             if (sx >= canvasX && sx < canvasX + canvasW &&
                                 sy >= canvasY && sy < canvasY + canvasH) {
-                                int dotSize = (color == Display::COLOR_BLACK) ? 9 : 2;
+                                int dotSize = (color == Display::COLOR_BLACK) ? 9 : 3;
                                 int half = dotSize / 2;
                                 display->drawRect(sx - half, sy - half, dotSize, dotSize, color);
                             }
@@ -1212,7 +1217,6 @@ input_phase:
                     std::string revealedAnswer;
                     auto sep = value.find('#');
                     if (sep != std::string::npos) revealedAnswer = value.substr(sep + 1);
-                    bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
                     showTimeUpScreen(revealedAnswer, false);
                     return;
                 } else if (kind == "STATUS" && value == "JUDGING_ACTIVE") {
@@ -1252,7 +1256,7 @@ input_phase:
                         currentDrawerNodeId = nodeId;
                         showCorrectScreen(winnerBoardNum, true, 3000);
                     } else {
-                        bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
+                        bgm.playOnce("/mnt/nfs/bgm/correct.wav");
                         isDrawerRole = false;
                         currentDrawerNodeId = senderNodeId;
                         showCorrectScreen(winnerBoardNum, false, 3000);
@@ -1496,7 +1500,6 @@ input_phase:
                         std::string revealedAnswer;
                         auto sep = value.find('#');
                         if (sep != std::string::npos) revealedAnswer = value.substr(sep + 1);
-                        bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
                         showTimeUpScreen(revealedAnswer, false);
                         return;
                     } else if (value.rfind("HINT#", 0) == 0) {
@@ -1550,7 +1553,7 @@ input_phase:
                             currentDrawerNodeId = nodeId;
                             showCorrectScreen(winnerBoardNum, true, 3000);
                         } else {
-                            bgm.playOnce("/mnt/nfs/bgm/incorrect.wav");
+                            bgm.playOnce("/mnt/nfs/bgm/correct.wav");
                             isDrawerRole = false;
                             currentDrawerNodeId = senderNodeId;
                             showCorrectScreen(winnerBoardNum, false, 3000);
@@ -1572,7 +1575,7 @@ input_phase:
                             unsigned int color = (unsigned int)std::stoul(colorStr, nullptr, 16);
                             if (sx >= canvasX && sx < canvasX + canvasW &&
                                 sy >= canvasY && sy < canvasY + canvasH) {
-                                int dotSize = (color == Display::COLOR_BLACK) ? 9 : 2;
+                                int dotSize = (color == Display::COLOR_BLACK) ? 9 : 3;
                                 int half = dotSize / 2;
                                 display->drawRect(sx - half, sy - half, dotSize, dotSize, color);
                             }
@@ -1927,13 +1930,15 @@ void CatchMindGame::runSingleBoardRound() {
     auto drawJudgeButtonsFor = [&](int playerNum, bool visible) {
         int halfW = screenW / 2;
         int panelX = (playerNum == 1) ? 0 : halfW;
+        int panelW = (playerNum == 1) ? halfW : (screenW - halfW);
 
-
-        int btnY = bottomY + 8;
-        int btnW = 78;
-        int btnH = 30;
-        int okX = panelX + 10;
-        int ngX = okX + btnW + 6;
+        int btnW = 130;
+        int btnH = 48;
+        int gap  = 12;
+        int totalW = btnW * 2 + gap;
+        int btnY = bottomY + panelH - btnH - 8;
+        int okX = panelX + (panelW - totalW) / 2;
+        int ngX = okX + btnW + gap;
 
         if (!visible) {
             display->drawRect(okX, btnY, btnW, btnH, ui::CARD_ALT);
@@ -1942,20 +1947,23 @@ void CatchMindGame::runSingleBoardRound() {
         }
 
         drawPanelCard(display, okX, btnY, btnW, btnH, ui::OK, 0x1c492d, 0x1a3e29);
-        display->drawText(okX + 24, btnY + 9, "OK", ui::OK, 1);
+        drawTextCentered(display, okX + btnW / 2, btnY + btnH / 2 - 8, "OK", ui::OK, 2);
 
         drawPanelCard(display, ngX, btnY, btnW, btnH, ui::NG, 0x4f2222, 0x3f1e1e);
-        display->drawText(ngX + 24, btnY + 9, "NG", ui::NG, 1);
+        drawTextCentered(display, ngX + btnW / 2, btnY + btnH / 2 - 8, "NG", ui::NG, 2);
     };
 
     auto getJudgeButtonRects = [&](int playerNum, int &okX, int &ngX, int &btnY, int &btnW, int &btnH) {
         int halfW = screenW / 2;
         int panelX = (playerNum == 1) ? 0 : halfW;
-        btnY = bottomY + 8;
-        btnW = 78;
-        btnH = 30;
-        okX = panelX + 10;
-        ngX = okX + btnW + 6;
+        int panelW = (playerNum == 1) ? halfW : (screenW - halfW);
+        btnW = 130;
+        btnH = 48;
+        int gap = 12;
+        int totalW = btnW * 2 + gap;
+        btnY = bottomY + panelH - btnH - 8;
+        okX = panelX + (panelW - totalW) / 2;
+        ngX = okX + btnW + gap;
     };
 
     bool answerStrokeActive1 = false;
@@ -1969,9 +1977,9 @@ void CatchMindGame::runSingleBoardRound() {
         int panelW = (playerNum == 1) ? halfW : (screenW - halfW);
 
         int areaX = panelX + 8;
-        int areaY = bottomY + 24;
+        int areaY = bottomY + 4;
         int areaW = std::max(10, panelW - 16);
-        int areaH = std::max(10, panelH - 24 - 40);
+        int areaH = std::max(10, panelH - 4 - 48 - 8 - 4);  // top4 + btnH48 + gap8 + bot4
 
         int sx = areaX + (nx * (areaW - 1)) / 999;
         int sy = areaY + (ny * (areaH - 1)) / 999;
@@ -2012,7 +2020,6 @@ void CatchMindGame::runSingleBoardRound() {
     broadcastStatusMessage("DRAWING_ACTIVE");
     printRoundGuide();
 
-    drawBrushDot(cursorX, cursorY);
     drawDrawerTools();
     display->endFrame();
 
@@ -2039,7 +2046,9 @@ void CatchMindGame::runSingleBoardRound() {
     const int ROUND_TIMEOUT_SEC = 60;
 
     auto judgeOk = [&](int playerNum) {
-        drawJudgeButtonsFor(playerNum, false);
+        display->beginFrame();
+        paintAnswerPanel(playerNum, (playerNum == 1) ? 0x102336 : 0x2a1b21);
+        display->endFrame();
         bgm.playOnce("/mnt/nfs/bgm/correct.wav");
         int elapsedJudge = (int)std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - roundStartTime).count();
@@ -2068,7 +2077,6 @@ void CatchMindGame::runSingleBoardRound() {
             answerStrokeActive1 = false;
             display->beginFrame();
             paintAnswerPanel(1, 0x102336);
-            drawJudgeButtonsFor(1, false);
             display->endFrame();
             broadcastStatusMessage("A_CLEAR_P1");  //   P1   
             broadcastStatusMessage("RETRY_P1");
@@ -2078,7 +2086,6 @@ void CatchMindGame::runSingleBoardRound() {
             answerStrokeActive2 = false;
             display->beginFrame();
             paintAnswerPanel(2, 0x2a1b21);
-            drawJudgeButtonsFor(2, false);
             display->endFrame();
             broadcastStatusMessage("A_CLEAR_P2");  //   P2   
             broadcastStatusMessage("RETRY_P2");
@@ -2260,7 +2267,7 @@ void CatchMindGame::runSingleBoardRound() {
                 if (senderNodeId == nodeId) continue;
                 if (kind == "ANSWER") {
                     if (judgingActive) {
-                        std::cout << "[]      \n";
+                        std::cout << "[] 판정 중 ANSWER 무시\n";
                         continue;
                     }
                     auto sep = value.find(':');
@@ -2279,6 +2286,7 @@ void CatchMindGame::runSingleBoardRound() {
                         broadcastStatusMessage("JUDGING_ACTIVE");
 
                         // Submit highlight: panel border + top banner
+                        display->beginFrame();
                         {
                             int hw = screenW / 2;
                             int pnlX  = (pn == 1) ? 0   : hw;
@@ -2298,9 +2306,8 @@ void CatchMindGame::runSingleBoardRound() {
                             int bLen = (int)banner.size() * 6 * 2;
                             display->drawText(pnlX + (pnlW - bLen) / 2, bottomY + 8, banner, 0x000000, 2);
                         }
-
-
                         drawJudgeButtonsFor(pn, true);
+                        display->endFrame();
                     }
                 } else if (kind == "A_POINT") {
                     std::stringstream parse(value);
@@ -2505,7 +2512,7 @@ void CatchMindGame::drawBrushDot(int x, int y) {
     if (display == nullptr) {
         return;
     }
-    int dotSize = (brushColor == Display::COLOR_BLACK) ? 9 : 2;
+    int dotSize = (brushColor == Display::COLOR_BLACK) ? 9 : 3;
     int half = dotSize / 2;
     display->drawRect(x - half, y - half, dotSize, dotSize, brushColor);
 }
@@ -2857,9 +2864,7 @@ void CatchMindGame::showTimeUpScreen(const std::string &answer, bool isDrawer) {
     drawPanelCard(display, btnX, btnY, btnW, btnH, ui::OK, 0x1c492d, 0x1a3e29);
     drawTextCentered(display, cx, btnY + 14, isDrawer ? "WAITING CHALLENGERS" : "TAP TO CONFIRM", ui::OK, 1);
 
-
     int waitY = btnY + btnH + 16;
-    display->drawText(cx - 120, waitY, "Tap confirm to continue", ui::TEXT_DIM, 1);
     display->endFrame();
 
     bool myConfirmed = isDrawer; //     
@@ -2883,14 +2888,16 @@ void CatchMindGame::showTimeUpScreen(const std::string &answer, bool isDrawer) {
         sendReadyIfNeeded();
 
 
-        display->drawRect(cx - 150, waitY, 300, 24, ui::BG_DARK);
+        display->beginFrame();
+        display->drawRect(cx - 200, waitY, 400, 20, ui::BG_DARK);
         std::string waitMsg;
         if (!myConfirmed) {
             waitMsg = "Tap button to confirm";
         } else {
-            waitMsg = "Waiting for other players... (" + std::to_string(othersReady) + "/" + std::to_string(OTHERS_NEEDED) + ")";
+            waitMsg = "Waiting... (" + std::to_string(othersReady) + "/" + std::to_string(OTHERS_NEEDED) + ")";
         }
-        display->drawText(cx - 140, waitY, waitMsg.c_str(), ui::TEXT_DIM, 1);
+        drawTextCentered(display, cx, waitY, waitMsg, ui::TEXT_DIM, 1);
+        display->endFrame();
 
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -2963,6 +2970,7 @@ void CatchMindGame::showTimeUpScreen(const std::string &answer, bool isDrawer) {
     }
 
     // All boards confirmed
+    display->beginFrame();
     display->clearScreen(ui::BG_DARK);
     drawTextCentered(display, cx, screenH / 2 - 10, "ALL CONFIRMED", ui::OK, 2);
     drawTextCentered(display, cx, screenH / 2 + 20, "Next Round...", ui::TEXT_DIM, 1);
