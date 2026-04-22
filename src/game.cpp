@@ -438,6 +438,8 @@ bool CatchMindGame::roleSelection() {
         touchHasY   = false;
     }
 
+    std::set<std::string> joinedChallengerNodes;  // 도전자 선택한 보드 추적
+
     while (true) {
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -496,6 +498,21 @@ bool CatchMindGame::roleSelection() {
                               << " => challenger P" << myPlayerNumber << "\n";
                     std::cout << "[Role] Drawer selected by other board\n";
                     return true;
+                }
+                // 도전자 선택 카운트: 2명이 도전자를 골랐으면 자동으로 출제자
+                if (kind == "STATUS" && value == "CHALLENGER_JOIN") {
+                    joinedChallengerNodes.insert(senderNodeId);
+                    std::cout << "[Role] CHALLENGER_JOIN from " << senderNodeId
+                              << " (" << joinedChallengerNodes.size() << "/2)\n";
+                    if ((int)joinedChallengerNodes.size() >= 2) {
+                        std::cout << "[Role] 2 challengers joined -> auto DRAWER\n";
+                        isDrawerRole = true;
+                        drawerIp.clear();
+                        currentDrawerNodeId = nodeId;
+                        broadcastDrawerSelected();
+                        showTransitionScreen("AUTO DRAWER", "ALL CHOSE CHALLENGER", 1500);
+                        return true;
+                    }
                 }
             }
         }
