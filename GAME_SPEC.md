@@ -418,3 +418,21 @@ sy = (touchRawY - rawMinY) * screenH / (rawMaxY - rawMinY)
 | 논블로킹 대기 | `select()` 타임아웃 (5~200ms) |
 | 차단 대기 | `usleep()` — 전환 화면(`showCorrectScreen` 3초 등) 중 사용, 이 시간 동안 UDP 수신 불가 |
 | 캐릭터 표정 복귀 | `moodCryUntil = now() + 3s` → 매 루프에서 `now() >= moodCryUntil` 확인 |
+
+---
+
+### 라이브러리 독립 구현
+
+임베디드 환경 특성상 libpng, FreeType 등 범용 그래픽 라이브러리를 사용할 수 없어, 필요한 기능을 직접 구현했다.
+
+#### 비트맵 폰트 직접 제작
+- A-Z, 0-9, 기호(`. : - / !` 등)를 5×7 비트맵 패턴으로 `display.cpp`에 하드코딩
+- `scale` 파라미터로 정수 배율 확대 지원 (UI에서 1×~4× 혼용)
+- 한글 렌더링이 불필요한 모든 UI 레이블은 ASCII로 통일해 폰트 복잡도 최소화
+- FreeType 등 외부 폰트 라이브러리 링크 없음
+
+#### PPM 이미지 포맷 직접 파싱
+- 보드에 libpng가 없어 PNG를 직접 디코딩할 수 없음
+- PPM P6(바이너리) 포맷 채택: `P6\n<width> <height>\n<maxval>\n` 헤더 뒤에 RGB 픽셀이 바로 나오는 단순한 구조라 라이브러리 없이 파싱 가능
+- 원본 이미지는 PNG로 관리하고, 배포 시 `deploy.sh`가 `scripts/png2ppm.py`를 실행해 자동으로 PPM으로 변환 후 NFS에 배포
+- 로딩 시 보드 bpp(16/32)에 맞게 RGB → RGB565 또는 ARGB8888로 변환 후 프레임버퍼에 직접 기록
